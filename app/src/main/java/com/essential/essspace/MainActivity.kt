@@ -1,15 +1,13 @@
 package com.essential.essspace
 
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
-import androidx.compose.ui.Modifier
-import androidx.navigation.compose.NavHost
-import androidx.navigation.compose.composable
-import androidx.navigation.compose.rememberNavController
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.*
+import androidx.navigation.NavType
+import androidx.navigation.compose.*
 import com.essential.essspace.ui.theme.EssentialSpaceTheme
 
 class MainActivity : ComponentActivity() {
@@ -18,42 +16,38 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             EssentialSpaceTheme {
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background
-                ) {
-                    val navController = rememberNavController()
+                val navController = rememberNavController()
+                var capturedPhotoUri by remember { mutableStateOf<String?>(null) }
 
-                    NavHost(navController = navController, startDestination = "home") {
-                        composable("home") {
-                            HomeScreen(navController = navController)
-                        }
-                        composable("camera") {
-                            CameraScreen(
-                                onPhotoTaken = { uri ->
-                                    navController.navigate("record/$uri")
-                                },
-                                onCancel = {
-                                    navController.navigateUp()
+                NavHost(navController, startDestination = "home") {
+                    composable("home") {
+                        HomeScreen(navController = navController)
+                    }
+                    composable("camera") {
+                        CameraScreen(
+                            onPhotoTaken = { photoUri ->
+                                capturedPhotoUri = photoUri.toString()
+                                navController.navigate("audio")
+                            },
+                            onCancel = {
+                                navController.popBackStack()
+                            }
+                        )
+                    }
+                    composable("audio") {
+                        AudioRecordScreen(
+                            photoUri = capturedPhotoUri,
+                            onComplete = {
+                                navController.navigate("home") {
+                                    popUpTo("home") { inclusive = true }
                                 }
-                            )
-                        }
-                        composable("record/{photoUri}") { backStackEntry ->
-                            val photoUri = backStackEntry.arguments?.getString("photoUri")
-                            AudioRecordScreen(
-                                photoUri = photoUri,
-                                onComplete = {
-                                    navController.navigate("home") {
-                                        popUpTo("home") { inclusive = true }
-                                    }
-                                },
-                                onCancel = {
-                                    navController.navigateUp()
-
-                                    
+                            },
+                            onCancel = {
+                                navController.navigate("home") {
+                                    popUpTo("home") { inclusive = true }
                                 }
-                            )
-                        }
+                            }
+                        )
                     }
                 }
             }
