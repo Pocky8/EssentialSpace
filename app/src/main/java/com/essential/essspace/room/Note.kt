@@ -5,9 +5,11 @@ import androidx.room.PrimaryKey
 
 @Entity(tableName = "notes")
 data class Note(
-    @PrimaryKey(autoGenerate = true) val id: Long = 0,
-    val photoUri: String,
-    val audioUri: String,
-    val textNote: String? = null,
-    val timestamp: Long = System.currentTimeMillis()  // Timestamp to order notes
+    @PrimaryKey(autoGenerate = true) val id: Int = 0,
+    val photoPath: String?,
+    val audioPath: String?,
+    val text: String?,
+    val timestamp: Long = System.currentTimeMillis()  // <-- Add this
 )
+
+
