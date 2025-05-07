@@ -1,13 +1,12 @@
 package com.essential.essspace
 
-import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.*
-import androidx.navigation.NavType
-import androidx.navigation.compose.*
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.rememberNavController
 import com.essential.essspace.ui.theme.EssentialSpaceTheme
 
 class MainActivity : ComponentActivity() {
@@ -21,12 +20,14 @@ class MainActivity : ComponentActivity() {
 
                 NavHost(navController, startDestination = "home") {
                     composable("home") {
-                        HomeScreen(navController = navController)
+                        NotesListScreen(
+                            onAddNewNote = { navController.navigate("camera") }
+                        )
                     }
                     composable("camera") {
                         CameraScreen(
-                            onPhotoTaken = { photoUri ->
-                                capturedPhotoUri = photoUri.toString()
+                            onPhotoTaken = { uri ->
+                                capturedPhotoUri = uri.toString()
                                 navController.navigate("audio")
                             },
                             onCancel = {
@@ -38,11 +39,13 @@ class MainActivity : ComponentActivity() {
                         AudioRecordScreen(
                             photoUri = capturedPhotoUri,
                             onComplete = {
+                                capturedPhotoUri = null
                                 navController.navigate("home") {
                                     popUpTo("home") { inclusive = true }
                                 }
                             },
                             onCancel = {
+                                capturedPhotoUri = null
                                 navController.navigate("home") {
                                     popUpTo("home") { inclusive = true }
                                 }
