@@ -8,9 +8,12 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Add // Correct Import
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Menu // Correct Import
 import androidx.compose.material.icons.filled.PlayArrow
+// For a more specific screenshot icon, consider:
+// import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -30,6 +33,7 @@ import java.util.*
 @Composable
 fun NotesListScreen(
     onAddNewNote: () -> Unit,
+    onScreenshot: () -> Unit,
     viewModel: NotesListViewModel = viewModel()
 ) {
     val notes by viewModel.notes.collectAsState()
@@ -38,25 +42,32 @@ fun NotesListScreen(
     LaunchedEffect(Unit) { viewModel.loadNotes() }
 
     Scaffold(
-        topBar = { CenterAlignedTopAppBar(title = { Text("Essential Space") }) },
+        topBar = {
+            CenterAlignedTopAppBar(
+                title = { Text("Essential Space") },
+                actions = {
+                    IconButton(onClick = onScreenshot) {
+                        // Using Menu icon for screenshot action as per your previous code.
+                        // Consider Icons.Filled.CameraAlt or similar for better UX.
+                        Icon(Icons.Filled.Menu, contentDescription = "Take Screenshot")
+                    }
+                }
+            )
+        },
         floatingActionButton = {
             FloatingActionButton(onClick = onAddNewNote) {
-                Icon(Icons.Default.Add, null)
+                Icon(Icons.Filled.Add, contentDescription = "Add New Note")
             }
         }
-    ) { padding ->
-        Box(Modifier.fillMaxSize().padding(padding)) {
+    ) { innerPadding ->
+        Box(Modifier.fillMaxSize().padding(innerPadding)) {
             when {
                 loading -> {
-                    Text(
-                        "Loading...",
-                        style = MaterialTheme.typography.bodyLarge,
-                        modifier = Modifier.align(Alignment.Center)
-                    )
+                    CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
                 }
                 notes.isEmpty() -> {
                     Column(
-                        Modifier.align(Alignment.Center),
+                        modifier = Modifier.align(Alignment.Center),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Text("No notes found!", style = MaterialTheme.typography.headlineSmall)
@@ -66,11 +77,11 @@ fun NotesListScreen(
                 }
                 else -> {
                     LazyColumn(
-                        Modifier.fillMaxSize(),
+                        modifier = Modifier.fillMaxSize(),
                         contentPadding = PaddingValues(16.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        items(notes) { note ->
+                        items(notes, key = { note -> note.id }) { note ->
                             NoteCard(note) { viewModel.deleteNote(note.id.toLong()) }
                         }
                     }
@@ -85,58 +96,99 @@ private fun NoteCard(note: Note, onDelete: () -> Unit) {
     val mediaPlayer = remember { MediaPlayer() }
     var playing by remember { mutableStateOf(false) }
 
-    ElevatedCard(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp)) {
+    DisposableEffect(Unit) {
+        onDispose {
+            if (mediaPlayer.isPlaying) {
+                mediaPlayer.stop()
+            }
+            mediaPlayer.release()
+        }
+    }
+
+    ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp)) {
             Text(
-                SimpleDateFormat("MMM dd, yyyy HH:mm", Locale.US).format(Date(note.timestamp)),
+                text = SimpleDateFormat("MMM dd, yyyy HH:mm", Locale.US).format(Date(note.timestamp)),
                 style = MaterialTheme.typography.labelSmall
             )
+
             note.photoPath?.let { path ->
-                File(path).takeIf { it.exists() }?.let { file ->
+                val file = File(path)
+                if (file.exists()) {
                     Image(
-                        painter = rememberAsyncImagePainter(file),
-                        contentDescription = null,
+                        painter = rememberAsyncImagePainter(model = file),
+                        contentDescription = "Note Photo",
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(180.dp)
                             .padding(vertical = 8.dp),
                         contentScale = ContentScale.Crop
                     )
+                } else {
+                    Log.w("NoteCard", "Photo file not found: $path")
+                    // Optionally display a placeholder or error message
                 }
             }
-            note.audioPath?.let { ap ->
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .background(MaterialTheme.colorScheme.surfaceVariant)
-                        .padding(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    IconButton({
-                        if (playing) {
-                            mediaPlayer.stop(); playing = false
-                        } else {
-                            try {
+
+            note.audioPath?.let { audioPath ->
+                val audioFile = File(audioPath)
+                if (audioFile.exists()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                            .padding(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        IconButton(onClick = {
+                            if (playing) {
+                                if (mediaPlayer.isPlaying) {
+                                    mediaPlayer.stop()
+                                }
                                 mediaPlayer.reset()
-                                mediaPlayer.setDataSource(ap)
-                                mediaPlayer.prepare()
-                                mediaPlayer.start()
-                                playing = true
-                                mediaPlayer.setOnCompletionListener { playing = false }
-                            } catch (e: Exception) {
-                                Log.e("NoteCard","play failed",e)
+                                playing = false
+                            } else {
+                                try {
+                                    mediaPlayer.reset()
+                                    mediaPlayer.setDataSource(audioPath)
+                                    mediaPlayer.prepareAsync() // Use async preparation
+                                    mediaPlayer.setOnPreparedListener { mp ->
+                                        mp.start()
+                                        playing = true
+                                    }
+                                    mediaPlayer.setOnCompletionListener { mp ->
+                                        playing = false
+                                        mp.reset()
+                                    }
+                                    mediaPlayer.setOnErrorListener { mp, what, extra ->
+                                        Log.e("NoteCard", "MediaPlayer Error: what $what, extra $extra for $audioPath")
+                                        playing = false
+                                        mp.reset()
+                                        true // Indicates the error was handled
+                                    }
+                                } catch (e: Exception) {
+                                    Log.e("NoteCard", "MediaPlayer setup failed for $audioPath", e)
+                                    playing = false
+                                }
                             }
+                        }) {
+                            Icon(Icons.Filled.PlayArrow, contentDescription = "Play Audio")
                         }
-                    }) {
-                        Icon(Icons.Default.PlayArrow, null)
+                        Text(text = if (playing) "Playing..." else "Play audio")
                     }
-                    Text(if (playing) "Playing..." else "Play audio")
+                } else {
+                    Log.w("NoteCard", "Audio file not found: $audioPath")
                 }
             }
-            Spacer(Modifier.height(8.dp))
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                IconButton(onDelete) {
-                    Icon(Icons.Default.Delete, null, tint = Color.Red)
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End
+            ) {
+                IconButton(onClick = onDelete) {
+                    Icon(Icons.Filled.Delete, contentDescription = "Delete Note", tint = Color.Red)
                 }
             }
         }

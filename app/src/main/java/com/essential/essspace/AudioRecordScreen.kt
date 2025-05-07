@@ -1,146 +1,171 @@
 package com.essential.essspace
 
-import android.content.Context
+import android.Manifest
+import android.content.pm.PackageManager
 import android.media.MediaRecorder
-import android.net.Uri
 import android.os.Build
 import android.util.Log
-import androidx.activity.ComponentActivity
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material3.*
+import androidx.compose.material3.Button
+import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import com.essential.essspace.room.Note
-import com.essential.essspace.room.NoteRepository
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
+import androidx.core.content.ContextCompat
 import java.io.File
-import java.text.SimpleDateFormat
-import java.util.*
+import java.io.IOException
 
 @Composable
 fun AudioRecordScreen(
-    photoUri: String?,
-    onComplete: () -> Unit,
+    photoPath: String?,  // Renamed from photoUri for clarity
+    onComplete: (audioPath: String?) -> Unit, // Callback now includes audioPath
     onCancel: () -> Unit
 ) {
     val context = LocalContext.current
-    var recorder by remember { mutableStateOf<MediaRecorder?>(null) }
-    var audioFile by remember { mutableStateOf<File?>(null) }
-    var seconds by remember { mutableStateOf(0) }
-    var isRecording by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
+    var recorder: MediaRecorder? by remember { mutableStateOf(null) }
+    var audioFile: File? by remember { mutableStateOf(null) }
+    var recording by remember { mutableStateOf(false) }
+    var hasAudioPermission by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+        )
+    }
 
-    LaunchedEffect(Unit) {
-        val ts = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-        val tmp = File(context.cacheDir, "AUDIO_$ts.m4a")
-        audioFile = tmp
-        recorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
-            MediaRecorder(context)
-        else @Suppress("DEPRECATION") MediaRecorder()
-        recorder!!.apply {
-            setAudioSource(MediaRecorder.AudioSource.MIC)
-            setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-            setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-            setOutputFile(tmp.absolutePath)
-            prepare()
-            start()
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+        onResult = { granted ->
+            hasAudioPermission = granted
+            if (!granted) {
+                Toast.makeText(context, "Audio permission denied", Toast.LENGTH_SHORT).show()
+                onCancel() // Or handle appropriately
+            }
         }
-        isRecording = true
-        while (isRecording) {
-            delay(1_000)
-            seconds++
+    )
+
+    LaunchedEffect(key1 = true) {
+        if (!hasAudioPermission) {
+            permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
         }
     }
 
+    fun createAudioFile(): File {
+        val audioNotesDir = File(context.filesDir, "audio_notes")
+        if (!audioNotesDir.exists()) {
+            audioNotesDir.mkdirs()
+        }
+        return File(audioNotesDir, "audio_${System.currentTimeMillis()}.mp4")
+    }
+
+    fun startRecording() {
+        if (!hasAudioPermission) {
+            Toast.makeText(context, "Audio permission required", Toast.LENGTH_SHORT).show()
+            permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+            return
+        }
+        audioFile = createAudioFile()
+        recorder = (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            MediaRecorder(context)
+        } else {
+            @Suppress("DEPRECATION")
+            MediaRecorder()
+        }).apply {
+            setAudioSource(MediaRecorder.AudioSource.MIC)
+            setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+            setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+            setOutputFile(audioFile!!.absolutePath)
+            try {
+                prepare()
+                start()
+                recording = true
+            } catch (e: IOException) {
+                Log.e("AudioRecordScreen", "MediaRecorder prepare() failed", e)
+                Toast.makeText(context, "Failed to start recording: ${e.message}", Toast.LENGTH_LONG).show()
+                // Clean up
+                this.release()
+                recorder = null
+                audioFile?.delete()
+                audioFile = null
+            }
+        }
+    }
+
+    fun stopRecording(saveFile: Boolean) {
+        try {
+            recorder?.apply {
+                stop()
+                release()
+            }
+        } catch (e: IllegalStateException) {
+            Log.e("AudioRecordScreen", "MediaRecorder stop/release failed", e)
+            // It might have already been stopped or not started properly
+        }
+        recorder = null
+        recording = false
+        if (!saveFile) {
+            audioFile?.delete()
+            audioFile = null
+        }
+    }
+
+    // Cleanup recorder if the composable is disposed while recording
     DisposableEffect(Unit) {
         onDispose {
-            recorder?.run { try { stop() } catch (_: Exception) {}; release() }
-            isRecording = false
+            if (recording) {
+                stopRecording(saveFile = false) // Don't save if screen is left abruptly
+            }
         }
     }
 
     Column(
-        Modifier.fillMaxSize().padding(16.dp),
+        Modifier.fillMaxSize().padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.SpaceBetween
+        verticalArrangement = Arrangement.Center
     ) {
-        Text(
-            "Recording: ${"%02d:%02d".format(seconds / 60, seconds % 60)}",
-            style = MaterialTheme.typography.headlineMedium
-        )
-        Icon(
-            Icons.Default.Mic, contentDescription = null,
-            tint = if (isRecording) MaterialTheme.colorScheme.error else LocalContentColor.current,
-            modifier = Modifier.size(96.dp)
-        )
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+        if (!hasAudioPermission) {
+            Text("Audio permission is required to record audio.")
+            Button(onClick = { permissionLauncher.launch(Manifest.permission.RECORD_AUDIO) }) {
+                Text("Grant Permission")
+            }
+        } else {
+            Button(onClick = {
+                if (!recording) {
+                    startRecording()
+                } else {
+                    stopRecording(saveFile = true) // Keep file when user explicitly stops
+                }
+            }) {
+                Text(if (recording) "Stop Recording" else "Record Audio")
+            }
+
+            Spacer(Modifier.height(16.dp))
+
             Button(
                 onClick = {
-                    recorder?.run { try { stop() } catch (_: Exception) {}; release() }
-                    isRecording = false
-                    onCancel()
+                    if (recording) {
+                        stopRecording(saveFile = true)
+                    }
+                    onComplete(audioFile?.absolutePath) // Pass the path
                 },
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                enabled = !recording || audioFile != null // Enable if not recording OR if recording and file exists
             ) {
-                Icon(Icons.Default.Close, null)
-                Spacer(Modifier.width(8.dp))
+                Text("Save & Return")
+            }
+
+            Spacer(Modifier.height(16.dp))
+
+            Button(onClick = {
+                if (recording) {
+                    stopRecording(saveFile = false) // Don't save if cancelled
+                }
+                onCancel()
+            }) {
                 Text("Cancel")
             }
-            Button(onClick = {
-                recorder?.run { try { stop() } catch (_: Exception) {}; release() }
-                isRecording = false
-                audioFile?.let { saveNote(context, photoUri, it) }
-                onComplete()
-            }) {
-                Icon(Icons.Default.Check, null)
-                Spacer(Modifier.width(8.dp))
-                Text("Save")
-            }
         }
-    }
-}
-
-private fun saveNote(
-    context: Context,
-    photoUriString: String?,
-    audioFile: File
-) {
-    try {
-        val outDir = context.getExternalFilesDir("EssSpace")!!.apply { if (!exists()) mkdirs() }
-        val ts = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-        // copy audio
-        val audioOut = File(outDir, "AUDIO_$ts.m4a")
-        audioFile.copyTo(audioOut, overwrite = true)
-        // copy image via ContentResolver
-        val photoOut = File(outDir, "PHOTO_$ts.jpg")
-        photoUriString
-            ?.let { Uri.parse(it) }
-            ?.let { uri ->
-                context.contentResolver.openInputStream(uri)?.use { input ->
-                    photoOut.outputStream().use { output -> input.copyTo(output) }
-                }
-            }
-        // insert into Room
-        val note = Note(
-            photoPath = photoOut.absolutePath,
-            audioPath = audioOut.absolutePath,
-            text = null
-        )
-        CoroutineScope(Dispatchers.IO).launch {
-            NoteRepository(context).insertNote(note)
-            Log.d("AudioRecordScreen","Inserted note: $note")
-        }
-    } catch (e: Exception) {
-        Log.e("AudioRecordScreen","saveNote failed", e)
     }
 }

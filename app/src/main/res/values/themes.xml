@@ -3,4 +3,10 @@
     <style name="Theme.EssentialSpace" parent="android:Theme.DeviceDefault.Light.NoActionBar">
         <item name="android:statusBarColor">@color/purple_700</item>
     </style>
+<style name="Theme.EssentialSpace.Transparent" parent="Theme.EssentialSpace">
+    <!-- let underlying UI show through -->
+    <item name="android:windowIsTranslucent">true</item>
+    <item name="android:windowBackground">@android:color/transparent</item>
+    <item name="android:windowContentOverlay">@null</item>
+</style>
 </resources>

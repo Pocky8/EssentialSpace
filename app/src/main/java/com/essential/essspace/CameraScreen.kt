@@ -7,8 +7,10 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -19,46 +21,39 @@ import java.io.File
 
 @Composable
 fun CameraScreen(
-    onPhotoTaken: (Uri) -> Unit,
+    onPhotoTaken: (String) -> Unit,
     onCancel: () -> Unit
 ) {
     val context = LocalContext.current
-
-    // Create image file in cache directory
+    // create the file in the cache or externalFilesDir
     val imageFile = File(context.cacheDir, "captured_image.jpg")
 
-    // Convert to content:// URI using FileProvider
     val photoUri: Uri = FileProvider.getUriForFile(
         context,
-        "${context.packageName}.provider", // MUST match manifest
+        "${context.packageName}.provider",
         imageFile
     )
 
-    // Launcher for camera
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
         if (success) {
-            onPhotoTaken(photoUri)
+            // Return the file path so AudioRecordScreen can store them together
+            onPhotoTaken(imageFile.absolutePath)
         } else {
             onCancel()
         }
     }
 
-    // Launch camera on first composition
     LaunchedEffect(Unit) {
         launcher.launch(photoUri)
     }
 
-    // UI with a cancel button in case user comes back manually
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black),
         contentAlignment = Alignment.TopStart
     ) {
-        IconButton(
-            onClick = onCancel,
-            modifier = Modifier.padding(16.dp)
-        ) {
+        IconButton(onClick = onCancel, modifier = Modifier.padding(16.dp)) {
             Icon(Icons.Default.Close, contentDescription = "Cancel", tint = Color.White)
         }
     }
