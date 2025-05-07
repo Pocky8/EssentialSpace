@@ -2,35 +2,30 @@ package com.essential.essspace.room
 
 import android.content.Context
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow // Import Flow
 import kotlinx.coroutines.withContext
 
 class NoteRepository(context: Context) {
 
-    // Get the DAO from AppDatabase
-    private val noteDao = AppDatabase.getDatabase(context).noteDao()
+    private val noteDao = AppDatabase.getDatabase(context.applicationContext).noteDao() // Use applicationContext
 
-    // Insert a new note (with photoUri, audioUri, etc.)
-    suspend fun insertNote(note: Note) {
-        withContext(Dispatchers.IO) {
+    suspend fun insertNote(note: Note): Long { // Return Long
+        return withContext(Dispatchers.IO) {
             noteDao.insert(note)
         }
     }
 
-    // Get all notes sorted by timestamp
-    suspend fun getAllNotes(): List<Note> {
-        return withContext(Dispatchers.IO) {
-            noteDao.getAllNotes()
-        }
+    // Get all notes as a Flow
+    fun getAllNotesFlow(): Flow<List<Note>> { // No suspend, returns Flow directly
+        return noteDao.getAllNotesFlow()
     }
 
-    // Retrieve a note by its ID
     suspend fun getNoteById(id: Long): Note? {
         return withContext(Dispatchers.IO) {
             noteDao.getNoteById(id)
         }
     }
 
-    // Delete a note by its ID
     suspend fun deleteNoteById(id: Long) {
         withContext(Dispatchers.IO) {
             noteDao.deleteNoteById(id)

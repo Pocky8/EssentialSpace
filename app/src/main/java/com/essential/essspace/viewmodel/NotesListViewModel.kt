@@ -8,11 +8,11 @@ import com.essential.essspace.room.NoteRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
 class NotesListViewModel(application: Application) : AndroidViewModel(application) {
-
-    private val repository = NoteRepository(application)
+    private val repository: NoteRepository = NoteRepository(application)
 
     private val _notes = MutableStateFlow<List<Note>>(emptyList())
     val notes: StateFlow<List<Note>> = _notes.asStateFlow()
@@ -27,16 +27,24 @@ class NotesListViewModel(application: Application) : AndroidViewModel(applicatio
     fun loadNotes() {
         viewModelScope.launch {
             _isLoading.value = true
-            _notes.value = repository.getAllNotes()
-            _isLoading.value = false
+            repository.getAllNotesFlow().collectLatest { noteList ->
+                _notes.value = noteList
+                _isLoading.value = false
+            }
         }
     }
 
-    fun deleteNote(id: Long) {
+    fun insertNote(note: Note) {
         viewModelScope.launch {
-            repository.deleteNoteById(id)
-            // Refresh the list
-            loadNotes()
+            repository.insertNote(note)
+            // Flow will automatically update the list
+        }
+    }
+
+    fun deleteNote(noteId: Long) {
+        viewModelScope.launch {
+            repository.deleteNoteById(noteId)
+            // Flow will automatically update the list
         }
     }
 }
