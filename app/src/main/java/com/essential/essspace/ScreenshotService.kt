@@ -1,7 +1,6 @@
 package com.essential.essspace
 
 import android.app.Activity
-import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
@@ -11,6 +10,7 @@ import android.graphics.Bitmap
 import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
+import android.media.Image
 import android.media.ImageReader
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
@@ -21,310 +21,340 @@ import android.os.IBinder
 import android.util.DisplayMetrics
 import android.util.Log
 import android.view.WindowManager
-import android.widget.Toast
 import androidx.core.app.NotificationCompat
-import com.essential.essspace.room.Note // Assuming you want to save to Room
-import com.essential.essspace.room.NoteRepository // Assuming you want to save to Room
+import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.text.TextRecognition
+import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
 import java.io.FileOutputStream
+import java.io.IOException
+import java.nio.ByteBuffer
 
 class ScreenshotService : Service() {
 
-    private lateinit var mediaProjectionManager: MediaProjectionManager
+    companion object {
+        const val ACTION_START_PROJECTION = "com.essential.essspace.ACTION_START_PROJECTION"
+        const val EXTRA_RESULT_CODE = "result_code"
+        const val EXTRA_DATA_INTENT = "data_intent"
+        const val ACTION_SCREENSHOT_TAKEN_PROMPT_AUDIO = "com.essential.essspace.ACTION_SCREENSHOT_TAKEN_PROMPT_AUDIO"
+        private const val NOTIFICATION_CHANNEL_ID = "ScreenshotChannel"
+        private const val NOTIFICATION_ID = 123
+        private const val VIRTUAL_DISPLAY_NAME = "EssSpaceScreenCapture"
+    }
+
+    private val serviceScope = CoroutineScope(Dispatchers.IO)
+    private var mediaProjectionManager: MediaProjectionManager? = null
     private var mediaProjection: MediaProjection? = null
     private var virtualDisplay: VirtualDisplay? = null
     private var imageReader: ImageReader? = null
-    private lateinit var windowManager: WindowManager
-    private lateinit var handler: Handler
-    private lateinit var handlerThread: HandlerThread
-    private lateinit var noteRepository: NoteRepository
+    private var windowManager: WindowManager? = null
+    private var screenDensity: Int = 0
+    private var screenWidth: Int = 0
+    private var screenHeight: Int = 0
+    private var handlerThread: HandlerThread? = null
+    private var backgroundHandler: Handler? = null
 
-
-    companion object {
-        const val ACTION_START = "com.essential.essspace.ACTION_START_SCREENSHOT"
-        const val EXTRA_RESULT_CODE = "extra_result_code"
-        const val EXTRA_DATA = "extra_data"
-        private const val NOTIFICATION_CHANNEL_ID = "ScreenshotChannel"
-        private const val NOTIFICATION_ID = 123
-        private const val VIRTUAL_DISPLAY_NAME = "EssspaceScreenshot"
-        private const val TAG = "ScreenshotService"
+    private val mediaProjectionCallback = object : MediaProjection.Callback() {
+        override fun onStop() {
+            Log.w("ScreenshotService", "MediaProjection.Callback: onStop() called. Projection stopped externally.")
+            // Ensure cleanup if projection stops unexpectedly.
+            // Check mediaProjection to avoid issues if already stopping/stopped.
+            if (this@ScreenshotService.mediaProjection != null) {
+                stopSelfService()
+            }
+        }
     }
 
     override fun onCreate() {
         super.onCreate()
-        Log.d(TAG, "onCreate")
         mediaProjectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
-        noteRepository = NoteRepository(applicationContext) // Initialize repository
+
+        val metrics = DisplayMetrics()
+        @Suppress("DEPRECATION")
+        windowManager?.defaultDisplay?.getRealMetrics(metrics)
 
 
-        handlerThread = HandlerThread("ScreenshotHandlerThread")
-        handlerThread.start()
-        handler = Handler(handlerThread.looper)
+        screenDensity = metrics.densityDpi
+        screenWidth = metrics.widthPixels
+        screenHeight = metrics.heightPixels
+
+        if (screenWidth == 0 || screenHeight == 0) {
+            Log.e("ScreenshotService", "Failed to get valid screen dimensions. Using fallback 1080x1920.")
+            screenWidth = 1080
+            screenHeight = 1920
+        }
+
+        handlerThread = HandlerThread("ScreenshotHandlerThread").apply { start() }
+        backgroundHandler = Handler(handlerThread!!.looper)
 
         createNotificationChannel()
+        val notification = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
+            .setContentTitle("EssSpace")
+            .setContentText("Capturing screenshot...")
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setPriority(NotificationCompat.PRIORITY_MIN)
+            .build()
+        startForeground(NOTIFICATION_ID, notification)
+        Log.d("ScreenshotService", "Service created and foregrounded. Screen: $screenWidth x $screenHeight @ $screenDensity dpi")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        Log.d(TAG, "onStartCommand, action: ${intent?.action}")
-        if (intent?.action == ACTION_START) {
+        Log.d("ScreenshotService", "onStartCommand received action: ${intent?.action}")
+        if (intent?.action == ACTION_START_PROJECTION) {
             val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, Activity.RESULT_CANCELED)
-            val data: Intent? = intent.getParcelableExtra(EXTRA_DATA)
+            val data: Intent? = intent.getParcelableExtra(EXTRA_DATA_INTENT)
 
             if (resultCode == Activity.RESULT_OK && data != null) {
-                Log.d(TAG, "Permission granted, starting foreground service.")
-                startForeground(NOTIFICATION_ID, createNotification())
+                mediaProjection = mediaProjectionManager?.getMediaProjection(resultCode, data)
+                if (mediaProjection == null) {
+                    Log.e("ScreenshotService", "Failed to get MediaProjection.")
+                    stopSelfService()
+                    return START_NOT_STICKY
+                }
+                mediaProjection?.registerCallback(mediaProjectionCallback, backgroundHandler)
+                Log.d("ScreenshotService", "MediaProjection obtained and callback registered.")
 
-                // Delay slightly to allow system to prepare, then get projection
-                handler.postDelayed({
-                    try {
-                        mediaProjection = mediaProjectionManager.getMediaProjection(resultCode, data)
-                        if (mediaProjection == null) {
-                            Log.e(TAG, "MediaProjection is null after getMediaProjection")
-                            stopSelfService("MediaProjection is null after getMediaProjection")
-                            return@postDelayed
-                        }
-                        Log.d(TAG, "MediaProjection obtained.")
-                        mediaProjection?.registerCallback(MediaProjectionCallback(), handler)
-                        Log.d(TAG, "MediaProjection callback registered.")
-                        setupVirtualDisplay()
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Error starting projection: ${e.message}", e)
-                        stopSelfService("Error starting projection: ${e.message}")
-                    }
-                }, 300) // 300ms delay
+                serviceScope.launch {
+                    delay(300)
+                    captureScreen()
+                }
             } else {
-                Log.e(TAG, "Result code not OK or data is null. ResultCode: $resultCode")
-                stopSelfService("Result code not OK or data is null")
+                Log.e("ScreenshotService", "Result code not OK or data intent is null for projection.")
+                stopSelfService()
             }
         } else {
-            Log.w(TAG, "Unknown action or null intent. Action: ${intent?.action}")
-            stopSelfService("Unknown action or null intent")
+            Log.w("ScreenshotService", "Unknown action or null intent: ${intent?.action}")
+            stopSelfService()
         }
-        return START_NOT_STICKY
+        return START_STICKY
     }
 
+    private fun captureScreen() {
+        if (mediaProjection == null) {
+            Log.e("ScreenshotService", "MediaProjection is null in captureScreen. Cannot capture.")
+            stopSelfService()
+            return
+        }
+        if (screenWidth <= 0 || screenHeight <= 0) {
+            Log.e("ScreenshotService", "Invalid screen dimensions ($screenWidth x $screenHeight) in captureScreen. Aborting.")
+            stopSelfService()
+            return
+        }
+
+        imageReader?.close()
+        imageReader = ImageReader.newInstance(screenWidth, screenHeight, PixelFormat.RGBA_8888, 2)
+        Log.d("ScreenshotService", "ImageReader created for $screenWidth x $screenHeight")
+
+        virtualDisplay?.release()
+        try {
+            virtualDisplay = mediaProjection?.createVirtualDisplay(
+                VIRTUAL_DISPLAY_NAME,
+                screenWidth, screenHeight, screenDensity,
+                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                imageReader?.surface, null, backgroundHandler
+            )
+        } catch (e: Exception) {
+            Log.e("ScreenshotService", "Exception during createVirtualDisplay.", e)
+            stopSelfService()
+            return
+        }
+
+        if (virtualDisplay == null) {
+            Log.e("ScreenshotService", "Failed to create VirtualDisplay.")
+            stopSelfService()
+            return
+        }
+        Log.d("ScreenshotService", "VirtualDisplay created.")
+
+        fun stopProjection() {
+            backgroundHandler?.post {
+                virtualDisplay?.release()
+                virtualDisplay = null // Nullify after release
+                imageReader?.close()
+                imageReader = null // Nullify after close
+                if (mediaProjection != null) {
+                    mediaProjection?.unregisterCallback(mediaProjectionCallback) // Unregister the callback
+                    mediaProjection?.stop()
+                    mediaProjection = null
+                    Log.d("ScreenshotService", "MediaProjection resources released on background thread.")
+                }
+            }
+        }
+
+        imageReader?.setOnImageAvailableListener({ reader ->
+            var image: Image? = null
+            var bitmap: Bitmap? = null
+            var croppedBitmap: Bitmap? = null
+            try {
+                image = reader.acquireLatestImage()
+                if (image != null) {
+                    Log.d("ScreenshotService", "Image acquired from ImageReader.")
+                    val planes = image.planes
+                    val buffer: ByteBuffer = planes[0].buffer
+                    val pixelStride = planes[0].pixelStride
+                    val rowStride = planes[0].rowStride
+                    val rowPadding = rowStride - pixelStride * screenWidth
+
+                    bitmap = Bitmap.createBitmap(
+                        screenWidth + rowPadding / pixelStride,
+                        screenHeight,
+                        Bitmap.Config.ARGB_8888
+                    )
+                    bitmap.copyPixelsFromBuffer(buffer)
+                    croppedBitmap = Bitmap.createBitmap(bitmap, 0, 0, screenWidth, screenHeight)
+                    Log.d("ScreenshotService", "Screenshot captured and cropped successfully.")
+                    processCapturedBitmap(croppedBitmap)
+                } else {
+                    Log.w("ScreenshotService", "acquireLatestImage returned null.")
+                    stopProjection()
+                    stopSelfService()
+                }
+            } catch (e: Exception) {
+                Log.e("ScreenshotService", "Error acquiring or processing image in listener: ${e.message}", e)
+                croppedBitmap?.recycle()
+                stopProjection()
+                stopSelfService()
+            } finally {
+                image?.close()
+                bitmap?.recycle()
+            }
+        }, backgroundHandler)
+    }
+
+    private fun processCapturedBitmap(bitmapToProcess: Bitmap) {
+        val photoPath = saveBitmapToFile(bitmapToProcess)
+        if (photoPath == null) {
+            Log.e("ScreenshotService", "Failed to save screenshot bitmap.")
+            bitmapToProcess.recycle()
+            stopProjection()
+            stopSelfService()
+            return
+        }
+
+        val image = InputImage.fromBitmap(bitmapToProcess, 0)
+        val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+
+        recognizer.process(image)
+            .addOnSuccessListener { visionText ->
+                val ocrResultText = visionText.text
+                Log.d("ScreenshotService", "ML Kit OCR successful. Text: ${ocrResultText.take(100)}")
+                sendBroadcastResult(photoPath, ocrResultText.ifBlank { null })
+            }
+            .addOnFailureListener { e ->
+                Log.e("ScreenshotService", "ML Kit OCR failed: ${e.message}", e)
+                sendBroadcastResult(photoPath, null)
+            }
+            .addOnCompleteListener {
+                if (!bitmapToProcess.isRecycled) {
+                    bitmapToProcess.recycle()
+                    Log.d("ScreenshotService", "Bitmap recycled after ML Kit processing.")
+                }
+                stopProjection()
+                stopSelfService()
+                Log.d("ScreenshotService", "ML Kit complete. Service shutdown initiated from onCompleteListener.")
+            }
+    }
+
+    private fun saveBitmapToFile(bitmap: Bitmap): String? {
+        val file = File(cacheDir, "screenshot_${System.currentTimeMillis()}.png")
+        return try {
+            FileOutputStream(file).use { out ->
+                bitmap.compress(Bitmap.CompressFormat.PNG, 90, out)
+            }
+            Log.d("ScreenshotService", "Bitmap saved to: ${file.absolutePath}")
+            file.absolutePath
+        } catch (e: IOException) {
+            Log.e("ScreenshotService", "Error saving bitmap to file", e)
+            null
+        }
+    }
+
+    private fun sendBroadcastResult(filePath: String?, ocrText: String?) {
+        if (filePath == null) {
+            Log.e("ScreenshotService", "Cannot send broadcast, file path is null.")
+            return
+        }
+        val intent = Intent(ACTION_SCREENSHOT_TAKEN_PROMPT_AUDIO)
+        intent.putExtra("photoPath", filePath)
+        ocrText?.let { intent.putExtra("ocrText", it) }
+        try {
+            sendBroadcast(intent)
+            Log.d("ScreenshotService", "Broadcast sent - Path: $filePath, OCR: ${ocrText?.take(50)}")
+        } catch (e: Exception) {
+            Log.e("ScreenshotService", "Error sending broadcast", e)
+        }
+    }
+
+    private fun stopProjection() {
+        backgroundHandler?.post {
+            virtualDisplay?.release()
+            virtualDisplay = null
+            imageReader?.close()
+            imageReader = null
+            if (mediaProjection != null) {
+                mediaProjection?.unregisterCallback(mediaProjectionCallback)
+                mediaProjection?.stop()
+                mediaProjection = null
+                Log.d("ScreenshotService", "MediaProjection resources released on background thread.")
+            }
+        }
+    }
+
+    private fun stopSelfService() {
+        Log.d("ScreenshotService", "stopSelfService called.")
+        backgroundHandler?.post {
+            handlerThread?.quitSafely()
+            handlerThread = null
+            backgroundHandler = null
+            Log.d("ScreenshotService", "HandlerThread quit and nulled.")
+
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+            Log.d("ScreenshotService", "Service stopped and foreground removed.")
+        }
+        if (backgroundHandler == null && handlerThread == null) {
+            // This case might happen if the handler thread died prematurely or was never started.
+            // Or if stopSelfService is called multiple times.
+            Log.w("ScreenshotService", "Attempting direct stop as handler/thread is null.")
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+        }
+    }
+
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onDestroy() {
+        super.onDestroy()
+        Log.d("ScreenshotService", "onDestroy called.")
+        if (mediaProjection != null || virtualDisplay != null || imageReader != null) {
+            Log.w("ScreenshotService", "onDestroy: Resources might still be active. Forcing cleanup.")
+            // Ensure projection resources are released directly if not already done by stopProjection via backgroundHandler
+            virtualDisplay?.release()
+            imageReader?.close()
+            mediaProjection?.unregisterCallback(mediaProjectionCallback) // Attempt unregister
+            mediaProjection?.stop() // Attempt stop
+        }
+        handlerThread?.quitSafely() // Ensure thread is quit
+        stopForeground(STOP_FOREGROUND_REMOVE)
+    }
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val serviceChannel = NotificationChannel(
                 NOTIFICATION_CHANNEL_ID,
                 "Screenshot Service Channel",
-                NotificationManager.IMPORTANCE_LOW // Use LOW to avoid sound/pop-up if not critical
-            )
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = "Channel for EssSpace Screenshot Service"
+            }
             val manager = getSystemService(NotificationManager::class.java)
             manager?.createNotificationChannel(serviceChannel)
-            Log.d(TAG, "Notification channel created.")
+            Log.d("ScreenshotService", "Notification channel created.")
         }
-    }
-
-    private fun createNotification(): Notification {
-        return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
-            .setContentTitle("Essspace")
-            .setContentText("Capturing screenshot...")
-            .setSmallIcon(R.mipmap.ic_launcher) // Ensure this icon exists
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .setOngoing(true)
-            .build()
-    }
-
-    private fun setupVirtualDisplay() {
-        Log.d(TAG, "Setting up virtual display.")
-        val displayMetrics = DisplayMetrics()
-        windowManager.defaultDisplay.getRealMetrics(displayMetrics)
-
-        val screenWidth = displayMetrics.widthPixels
-        val screenHeight = displayMetrics.heightPixels
-        val screenDensity = displayMetrics.densityDpi
-
-        if (screenWidth <= 0 || screenHeight <= 0) {
-            Log.e(TAG, "Invalid screen dimensions: $screenWidth x $screenHeight")
-            stopSelfService("Invalid screen dimensions: $screenWidth x $screenHeight")
-            return
-        }
-        Log.d(TAG, "Screen dimensions: $screenWidth x $screenHeight @ $screenDensity dpi")
-
-        imageReader = ImageReader.newInstance(screenWidth, screenHeight, PixelFormat.RGBA_8888, 2)
-        Log.d(TAG, "ImageReader created.")
-
-        imageReader?.setOnImageAvailableListener({ reader ->
-            Log.d(TAG, "Image available in ImageReader.")
-            var image: android.media.Image? = null
-            var bitmap: Bitmap? = null
-            var croppedBitmapToSave: Bitmap? = null
-            try {
-                image = reader.acquireLatestImage()
-                if (image != null) {
-                    Log.d(TAG, "Image acquired from reader.")
-                    val planes = image.planes
-                    val buffer = planes[0].buffer
-                    val pixelStride = planes[0].pixelStride
-                    val rowStride = planes[0].rowStride
-                    val rowPadding = rowStride - pixelStride * screenWidth
-
-                    val tempBitmap = Bitmap.createBitmap(
-                        screenWidth + rowPadding / pixelStride,
-                        screenHeight,
-                        Bitmap.Config.ARGB_8888
-                    )
-                    tempBitmap.copyPixelsFromBuffer(buffer)
-
-                    // Crop to actual screen dimensions if necessary
-                    croppedBitmapToSave = if (rowPadding > 0 || tempBitmap.width != screenWidth || tempBitmap.height != screenHeight) {
-                        Log.d(TAG, "Cropping bitmap.")
-                        Bitmap.createBitmap(tempBitmap, 0, 0, screenWidth, screenHeight)
-                    } else {
-                        Log.d(TAG, "Using original bitmap (no cropping needed).")
-                        tempBitmap // Use the original if no cropping needed
-                    }
-
-                    if (croppedBitmapToSave != tempBitmap) { // if a new bitmap was created by cropping
-                        tempBitmap.recycle()
-                    }
-
-                    saveBitmap(croppedBitmapToSave) // Pass the final bitmap to save
-                    Toast.makeText(this, "Screenshot saved!", Toast.LENGTH_SHORT).show()
-                    Log.i(TAG, "Screenshot processed and saved.")
-                } else {
-                    Log.w(TAG, "Acquired image was null.")
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Error processing image: ${e.message}", e)
-                Toast.makeText(this, "Error processing screenshot: ${e.message}", Toast.LENGTH_LONG).show()
-            } finally {
-                image?.close()
-                // The bitmap passed to saveBitmap should be recycled there if it's a copy,
-                // or after use if it's the original.
-                // For simplicity, let saveBitmap handle its input.
-                // croppedBitmapToSave?.recycle() // Don't recycle here if saveBitmap needs it.
-                stopSelfService() // Stop after attempting capture
-            }
-        }, handler)
-
-        try {
-            if (mediaProjection == null) {
-                Log.e(TAG, "MediaProjection became null before creating VirtualDisplay")
-                stopSelfService("MediaProjection became null before creating VirtualDisplay")
-                return
-            }
-            Log.d(TAG, "Creating virtual display.")
-            virtualDisplay = mediaProjection?.createVirtualDisplay(
-                VIRTUAL_DISPLAY_NAME,
-                screenWidth,
-                screenHeight,
-                screenDensity,
-                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-                imageReader?.surface,
-                null,
-                handler
-            )
-            if (virtualDisplay == null) {
-                Log.e(TAG, "Failed to create VirtualDisplay, it's null.")
-                stopSelfService("Failed to create VirtualDisplay")
-            } else {
-                Log.d(TAG, "Virtual display created successfully.")
-            }
-        } catch (e: SecurityException) {
-            Log.e(TAG, "SecurityException creating VirtualDisplay: ${e.message}", e)
-            stopSelfService("SecurityException creating VirtualDisplay: ${e.message}")
-        } catch (e: IllegalStateException) {
-            Log.e(TAG, "IllegalStateException creating VirtualDisplay: ${e.message}", e)
-            stopSelfService("IllegalStateException creating VirtualDisplay: ${e.message}")
-        }
-        catch (e: Exception) {
-            Log.e(TAG, "Generic error creating VirtualDisplay: ${e.message}", e)
-            stopSelfService("Error creating VirtualDisplay: ${e.message}")
-        }
-    }
-
-
-    private fun saveBitmap(bitmapToSave: Bitmap) {
-        val screenshotsDir = File(getExternalFilesDir(null), "Screenshots_Essspace")
-        if (!screenshotsDir.exists()) {
-            screenshotsDir.mkdirs()
-        }
-        val fileName = "screenshot_${System.currentTimeMillis()}.png"
-        val file = File(screenshotsDir, fileName)
-        Log.d(TAG, "Attempting to save screenshot to: ${file.absolutePath}")
-        try {
-            FileOutputStream(file).use { out ->
-                bitmapToSave.compress(Bitmap.CompressFormat.PNG, 100, out)
-                Log.i(TAG, "Screenshot bitmap compressed and saved to: ${file.absolutePath}")
-            }
-            // Save to Room Database
-            CoroutineScope(Dispatchers.IO).launch {
-                val newNote = Note(photoPath = file.absolutePath, audioPath = null, text = "Screenshot: $fileName")
-                noteRepository.insertNote(newNote) // Use the initialized repository
-                Log.d(TAG, "Screenshot metadata saved to Room database.")
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error saving bitmap to file or DB: ${e.message}", e)
-        } finally {
-            if (!bitmapToSave.isRecycled) {
-                // bitmapToSave.recycle() // Recycle after saving if it's no longer needed.
-                // Be cautious if any async operations still need it.
-                // For this flow, it should be safe to recycle.
-            }
-        }
-    }
-
-
-    private inner class MediaProjectionCallback : MediaProjection.Callback() {
-        override fun onStop() {
-            super.onStop()
-            Log.w(TAG, "MediaProjection.Callback onStop called.")
-            releaseResources()
-            // Consider stopping the service if projection stops unexpectedly
-            // stopSelfService("MediaProjection stopped via callback")
-        }
-    }
-
-    private fun releaseResources() {
-        Log.d(TAG, "Releasing resources...")
-        virtualDisplay?.release()
-        virtualDisplay = null
-        imageReader?.close() // Close the reader to free up its surface
-        imageReader = null
-        if (mediaProjection != null) {
-            mediaProjection?.unregisterCallback(MediaProjectionCallback()) // Unregister before stopping
-            mediaProjection?.stop()
-            mediaProjection = null
-            Log.d(TAG, "MediaProjection resources released.")
-        }
-    }
-
-    private fun stopSelfService(reason: String? = null) {
-        if (reason != null) {
-            Log.e(TAG, "Stopping service: $reason")
-            Toast.makeText(this, "Screenshot failed: $reason", Toast.LENGTH_LONG).show()
-        } else {
-            Log.i(TAG, "Stopping service normally.")
-        }
-        releaseResources()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            stopForeground(STOP_FOREGROUND_REMOVE)
-        } else {
-            @Suppress("DEPRECATION")
-            stopForeground(true)
-        }
-        stopSelf()
-        if (::handlerThread.isInitialized && handlerThread.isAlive) {
-            handlerThread.quitSafely()
-            Log.d(TAG, "HandlerThread quit.")
-        }
-    }
-
-    override fun onBind(intent: Intent?): IBinder? {
-        Log.d(TAG, "onBind called, returning null.")
-        return null
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        Log.d(TAG, "onDestroy called.")
-        stopSelfService("Service destroyed")
     }
 }

@@ -5,6 +5,21 @@ plugins {
 }
 
 android {
+    packaging {
+        resources {
+            excludes += setOf(
+                "META-INF/INDEX.LIST",
+                "META-INF/DEPENDENCIES",
+                "META-INF/LICENSE",
+                "META-INF/LICENSE.txt",
+                "META-INF/NOTICE",
+                "META-INF/NOTICE.txt",
+                "META-INF/ASL2.0",
+                "META-INF/*.kotlin_module"
+            )
+        }
+    }
+
     namespace = "com.essential.essspace"
     compileSdk = 34
 
@@ -20,7 +35,9 @@ android {
             useSupportLibrary = true
         }
     }
-
+    configurations.all {
+        exclude(group = "org.conscrypt", module = "conscrypt-openjdk-uber")
+    }
     buildTypes {
         release {
             isMinifyEnabled = false
@@ -95,6 +112,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 
     implementation("io.coil-kt:coil-compose:2.4.0")
+    implementation("com.google.mlkit:text-recognition:16.0.0")
 
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.1.5")

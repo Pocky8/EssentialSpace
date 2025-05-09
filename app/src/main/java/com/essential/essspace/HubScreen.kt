@@ -1,64 +1,67 @@
-package com.essential.essspace
+package com.essential.essspace // Or your ui.screens package
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add // FAB in NotesListScreen
-import androidx.compose.material.icons.filled.AudioFile // Example Icon
-import androidx.compose.material.icons.filled.CameraAlt // Example Icon
-import androidx.compose.material.icons.filled.Close // Example Icon
-import androidx.compose.material.icons.filled.Menu // FAB in HubScreen
-import androidx.compose.material.icons.filled.Screenshot // Example Icon
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.essential.essspace.NotesListScreen
+import com.essential.essspace.viewmodel.NotesListViewModel
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HubScreen(
+    notesViewModel: NotesListViewModel,
     onNavigateToCamera: () -> Unit,
     onNavigateToAudio: () -> Unit,
     onTakeScreenshot: () -> Unit,
-    onAddNewNoteFromHub: () -> Unit, // This is for the FAB in NotesListScreen
-    onScreenshotIconClick: () -> Unit // This is for the top-bar icon in NotesListScreen
+    // onScreenshotIconClick: () -> Unit, // Parameter removed
+    onNavigateToNoteDetail: (Int) -> Unit,
+    onAddNewTextNote: () -> Unit
 ) {
-    var showCaptureMenu by remember { mutableStateOf(false) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var showBottomSheet by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
 
     Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Essspace Notes") }
+                // Actions for the top bar icon were removed previously
+            )
+        },
         floatingActionButton = {
-            FloatingActionButton(onClick = { showCaptureMenu = true }) {
-                Icon(Icons.Filled.Menu, contentDescription = "Open Capture Options")
+            FloatingActionButton(onClick = { showBottomSheet = true }) {
+                Icon(Icons.Filled.Add, "Add Note")
             }
         }
-    ) { padding ->
-        Box(Modifier.fillMaxSize().padding(padding)) {
-            NotesListScreen( // Assuming NotesListScreen is defined elsewhere
-                onAddNewNote = onAddNewNoteFromHub,
-                onScreenshot = onScreenshotIconClick // Pass the specific screenshot action for NotesListScreen's top bar
-            )
-        }
+    ) { paddingValues ->
+        NotesListScreen(
+            notesViewModel = notesViewModel,
+            onNoteClick = onNavigateToNoteDetail,
+            modifier = Modifier.padding(paddingValues)
+        )
 
-        if (showCaptureMenu) {
+        if (showBottomSheet) {
             ModalBottomSheet(
-                onDismissRequest = { showCaptureMenu = false },
+                onDismissRequest = { showBottomSheet = false },
                 sheetState = sheetState,
+                windowInsets = WindowInsets(0.dp) // Consume insets
             ) {
                 CaptureOptionsMenuSheet(
-                    onCameraClick = {
-                        showCaptureMenu = false
-                        onNavigateToCamera()
+                    onDismiss = {
+                        scope.launch { sheetState.hide() }.invokeOnCompletion {
+                            if (!sheetState.isVisible) { showBottomSheet = false }
+                        }
                     },
-                    onAudioClick = {
-                        showCaptureMenu = false
-                        onNavigateToAudio()
-                    },
-                    onScreenshotClick = {
-                        showCaptureMenu = false
-                        onTakeScreenshot()
-                    },
-                    onDismiss = { showCaptureMenu = false }
+                    onTextNoteClick = onAddNewTextNote,
+                    onCameraClick = onNavigateToCamera,
+                    onAudioClick = onNavigateToAudio,
+                    onScreenshotClick = onTakeScreenshot
                 )
             }
         }
@@ -67,38 +70,40 @@ fun HubScreen(
 
 @Composable
 fun CaptureOptionsMenuSheet(
+    onDismiss: () -> Unit,
+    onTextNoteClick: () -> Unit,
     onCameraClick: () -> Unit,
     onAudioClick: () -> Unit,
-    onScreenshotClick: () -> Unit,
-    onDismiss: () -> Unit,
-    modifier: Modifier = Modifier
+    onScreenshotClick: () -> Unit
 ) {
     Column(
-        modifier = modifier
+        modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 16.dp),
+            .padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Text("Capture Options", style = MaterialTheme.typography.titleMedium)
-        Spacer(Modifier.height(16.dp))
-        Button(onClick = onCameraClick, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
-            Icon(Icons.Filled.CameraAlt, contentDescription = "Camera", modifier = Modifier.padding(end = 8.dp))
-            Text("Camera")
+        Text("Create New", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(bottom = 16.dp))
+
+        Button(onClick = { onTextNoteClick(); onDismiss() }, modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+            Icon(Icons.Filled.TextFields, "Text Note", modifier = Modifier.padding(end = 8.dp))
+            Text("Text Note")
         }
-        Spacer(Modifier.height(8.dp))
-        Button(onClick = onAudioClick, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
-            Icon(Icons.Filled.AudioFile, contentDescription = "Audio", modifier = Modifier.padding(end = 8.dp))
-            Text("Audio Only")
+        Button(onClick = { onCameraClick(); onDismiss() }, modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+            Icon(Icons.Filled.PhotoCamera, "Photo", modifier = Modifier.padding(end = 8.dp))
+            Text("Photo + Optional Audio")
         }
-        Spacer(Modifier.height(8.dp))
-        Button(onClick = onScreenshotClick, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
-            Icon(Icons.Filled.Screenshot, contentDescription = "Screenshot", modifier = Modifier.padding(end = 8.dp))
-            Text("Screenshot")
+        Button(onClick = { onAudioClick(); onDismiss() }, modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+            Icon(Icons.Filled.Mic, "Audio", modifier = Modifier.padding(end = 8.dp))
+            Text("Audio Recording")
         }
-        Spacer(Modifier.height(16.dp))
-        TextButton(onClick = onDismiss) {
-            Icon(Icons.Filled.Close, contentDescription = "Dismiss", modifier = Modifier.padding(end = 8.dp))
-            Text("Back to Hub")
+        Button(onClick = { onScreenshotClick(); onDismiss() }, modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+            Icon(Icons.Filled.Screenshot, "Screenshot", modifier = Modifier.padding(end = 8.dp))
+            Text("Screenshot + Optional Audio")
         }
+        Spacer(modifier = Modifier.height(16.dp))
+        Button(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) {
+            Text("Cancel")
+        }
+        Spacer(modifier = Modifier.height(16.dp)) // For system navigation bar
     }
 }

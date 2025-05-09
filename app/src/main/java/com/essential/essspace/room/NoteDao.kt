@@ -4,24 +4,26 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
-import kotlinx.coroutines.flow.Flow // Import Flow
+import androidx.room.Update // Import Update
+import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface NoteDao {
 
-    // Insert a new note
-    @Insert(onConflict = OnConflictStrategy.REPLACE) // It's good practice to define a conflict strategy
-    suspend fun insert(note: Note): Long // Return Long (rowId)
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(note: Note): Long
 
-    // Get all notes ordered by timestamp, returning a Flow
     @Query("SELECT * FROM notes ORDER BY timestamp DESC")
-    fun getAllNotesFlow(): Flow<List<Note>> // Changed to return Flow
+    fun getAllNotesFlow(): Flow<List<Note>>
 
-    // Get a note by ID
+    // Get a note by ID, returning a Flow
     @Query("SELECT * FROM notes WHERE id = :id")
-    suspend fun getNoteById(id: Long): Note?
+    fun getNoteByIdFlow(id: Int): Flow<Note?> // Changed to Int ID and returns Flow
 
-    // Delete a note by ID
+    // Update an existing note
+    @Update
+    suspend fun update(note: Note)
+
     @Query("DELETE FROM notes WHERE id = :id")
-    suspend fun deleteNoteById(id: Long)
+    suspend fun deleteNoteById(id: Int) // Changed to Int ID
 }
