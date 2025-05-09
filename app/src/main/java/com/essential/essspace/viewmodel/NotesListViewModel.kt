@@ -5,46 +5,33 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.essential.essspace.room.Note
 import com.essential.essspace.room.NoteRepository
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
 
 class NotesListViewModel(application: Application) : AndroidViewModel(application) {
-    private val repository: NoteRepository = NoteRepository(application)
 
-    private val _notes = MutableStateFlow<List<Note>>(emptyList())
-    val notes: StateFlow<List<Note>> = _notes.asStateFlow()
-
-    private val _isLoading = MutableStateFlow(false)
-    val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
+    private val repository: NoteRepository
+    val allNotes: Flow<List<Note>>
 
     init {
-        loadNotes()
+        // NoteRepository expects a Context, which 'application' (Application class) is.
+        repository = NoteRepository(application) // CORRECTED: Pass the application context
+        allNotes = repository.getAllNotesFlow()
     }
 
-    fun loadNotes() {
-        viewModelScope.launch {
-            _isLoading.value = true
-            repository.getAllNotesFlow().collectLatest { noteList ->
-                _notes.value = noteList
-                _isLoading.value = false
-            }
-        }
+    fun insertNote(note: Note) = viewModelScope.launch {
+        repository.insertNote(note)
     }
 
-    fun insertNote(note: Note) {
-        viewModelScope.launch {
-            repository.insertNote(note)
-            // Flow will automatically update the list
-        }
+    fun updateNote(note: Note) = viewModelScope.launch {
+        repository.updateNote(note)
     }
 
-    fun deleteNote(noteId: Long) {
-        viewModelScope.launch {
-            repository.deleteNoteById(noteId)
-            // Flow will automatically update the list
-        }
+    fun getNoteById(id: Int): Flow<Note?> {
+        return repository.getNoteByIdFlow(id)
+    }
+
+    fun deleteNoteById(id: Int) = viewModelScope.launch {
+        repository.deleteNoteById(id)
     }
 }
