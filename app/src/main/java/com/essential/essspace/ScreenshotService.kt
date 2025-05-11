@@ -12,6 +12,7 @@ import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.media.ImageReader
+import com.essential.essspace.TextCleanupUtils
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.Build
@@ -268,9 +269,10 @@ class ScreenshotService : Service() {
 
             textRecognizer.process(inputImage)
                 .addOnSuccessListener { visionText ->
-                    val ocrResultText = visionText.text
-                    Log.d(TAG, "OCR successful: ${ocrResultText.take(150)}")
-                    saveFileAndBroadcast(originalBitmapToSave, ocrResultText)
+                    val rawOcrResult = visionText.text
+                    val cleanedOcrResult = TextCleanupUtils.cleanOcrText(rawOcrResult)
+                    Log.d(TAG, "OCR successful. Raw: ${rawOcrResult.take(150)}, Cleaned: ${cleanedOcrResult?.take(150)}")
+                    saveFileAndBroadcast(originalBitmapToSave, cleanedOcrResult) // Pass cleaned text
                 }
                 .addOnFailureListener { e ->
                     Log.e(TAG, "OCR failed", e)

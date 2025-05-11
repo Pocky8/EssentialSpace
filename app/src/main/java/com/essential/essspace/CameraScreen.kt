@@ -27,6 +27,7 @@ import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import kotlinx.coroutines.launch
+import com.essential.essspace.TextCleanupUtils
 import java.io.File
 
 @Composable
@@ -74,10 +75,11 @@ fun CameraScreen(
 
                         recognizer.process(image)
                             .addOnSuccessListener { visionText ->
-                                val ocrResult = visionText.text
-                                Log.d("CameraScreen", "ML Kit OCR successful. Text: ${ocrResult.take(100)}")
+                                val rawOcrResult = visionText.text
+                                val cleanedOcrResult = TextCleanupUtils.cleanOcrText(rawOcrResult)
+                                Log.d("CameraScreen", "ML Kit OCR successful. Raw: ${rawOcrResult.take(100)}, Cleaned: ${cleanedOcrResult?.take(100)}")
                                 showProcessingIndicator = false
-                                onPhotoTaken(imageFile.absolutePath, ocrResult.ifBlank { null })
+                                onPhotoTaken(imageFile.absolutePath, cleanedOcrResult) // Pass cleaned text
                             }
                             .addOnFailureListener { e ->
                                 Log.e("CameraScreen", "ML Kit OCR failed for camera image", e)
