@@ -1,4 +1,5 @@
 package com.essential.essspace
+
 import android.media.MediaPlayer
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
@@ -27,7 +28,8 @@ fun NoteDetailScreen(
     navController: NavHostController,
     notesViewModel: NotesListViewModel = viewModel() // Or pass instance
 ) {
-    val noteState = notesViewModel.getNoteById(noteId).collectAsState(initial = null)
+    // Use getNoteByIdFlow instead of getNoteById
+    val noteState = notesViewModel.getNoteByIdFlow(noteId).collectAsState(initial = null)
     val note = noteState.value
     var textContent by remember(note) { mutableStateOf(note?.text ?: "") }
     val context = LocalContext.current
@@ -64,7 +66,9 @@ fun NoteDetailScreen(
         }
     ) { paddingValues ->
         if (note == null) {
-            Box(modifier = Modifier.fillMaxSize().padding(paddingValues), contentAlignment = Alignment.Center) {
+            Box(modifier = Modifier
+                .fillMaxSize()
+                .padding(paddingValues), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator()
             }
         } else {
@@ -121,7 +125,9 @@ fun NoteDetailScreen(
                     value = textContent,
                     onValueChange = { textContent = it },
                     label = { Text("Note Text") },
-                    modifier = Modifier.fillMaxWidth().weight(1f)
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
                 )
             }
         }

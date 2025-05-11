@@ -61,8 +61,9 @@ fun CameraScreen(
                         recognizer.process(image)
                             .addOnSuccessListener { visionText ->
                                 val ocrResult = visionText.text
-                                Log.d("CameraScreen", "ML Kit OCR successful for camera image. Text: ${ocrResult.take(100)}")
+                                Log.d("CameraScreen", "ML Kit OCR successful. Text: ${ocrResult.take(100)}")
                                 showProcessingIndicator = false
+                                // Instead of navigating directly to Audio, set the captured data:
                                 onPhotoTaken(imageFile.absolutePath, ocrResult.ifBlank { null })
                             }
                             .addOnFailureListener { e ->

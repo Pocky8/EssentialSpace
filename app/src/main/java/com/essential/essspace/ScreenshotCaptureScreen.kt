@@ -40,6 +40,8 @@ class ScreenshotCaptureActivity : ComponentActivity() {
         // It requests permission and then finishes.
 
         mediaProjectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        // Show toast before requesting permission
+        Toast.makeText(this, "Please prepare to take a screenshot.", Toast.LENGTH_LONG).show()
         requestScreenshotPermission()
     }
 

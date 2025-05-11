@@ -23,9 +23,10 @@ import java.util.Locale
 
 @Composable
 fun AudioRecordScreen(
-    photoPath: String?, // Kept for context if needed for title generation
-    onComplete: (audioPath: String?, transcribedText: String?) -> Unit, // audioPath will always be null
-    onCancel: () -> Unit
+    photoPath: String?, // Existing parameter
+    onComplete: (audioPath: String?, transcribedText: String?) -> Unit, // For when audio is recorded
+    onSkipAudio: () -> Unit, // New callback when user wants to skip audio
+    onCancel: () -> Unit // Cancel completely
 ) {
     val context = LocalContext.current
     var showProcessingMessage by remember { mutableStateOf(false) }
@@ -39,7 +40,7 @@ fun AudioRecordScreen(
             if (!speechResults.isNullOrEmpty()) {
                 val transcribedText = speechResults[0]
                 Log.d("AudioRecordScreen", "Transcription successful via RecognizerIntent: $transcribedText")
-                onComplete(null, transcribedText) // audioPath is null
+                onComplete(null, transcribedText) // audioPath stays null
             } else {
                 Log.d("AudioRecordScreen", "RecognizerIntent: No speech results found.")
                 Toast.makeText(context, "No transcription results.", Toast.LENGTH_SHORT).show()
@@ -63,13 +64,11 @@ fun AudioRecordScreen(
             onCancel()
             return
         }
-
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault().toString())
             putExtra(RecognizerIntent.EXTRA_PROMPT, "Speak now to create a note...")
         }
-
         try {
             Log.d("AudioRecordScreen", "Launching RecognizerIntent activity.")
             speechRecognitionLauncher.launch(intent)
@@ -128,6 +127,13 @@ fun AudioRecordScreen(
             }
         }
 
+        Spacer(Modifier.height(20.dp))
+        OutlinedButton(onClick = {
+            Log.d("AudioRecordScreen", "Skip Audio button clicked.")
+            onSkipAudio()
+        }) {
+            Text("Skip Audio")
+        }
         Spacer(Modifier.height(20.dp))
         OutlinedButton(onClick = {
             Log.d("AudioRecordScreen", "Cancel button clicked.")

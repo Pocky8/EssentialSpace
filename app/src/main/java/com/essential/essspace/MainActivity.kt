@@ -4,6 +4,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import androidx.compose.runtime.getValue
 import android.os.Bundle
 import android.util.Log
 import android.widget.Toast
@@ -12,7 +13,7 @@ import androidx.activity.compose.setContent
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.runtime.* // Keep this for other composable states if any
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModelProvider
 import androidx.navigation.NavHostController
@@ -22,29 +23,44 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.essential.essspace.room.Note
+import com.essential.essspace.AudioRecordScreen
+import com.essential.essspace.CameraScreen
 import com.essential.essspace.ui.screens.CreateTextNoteScreen
+import com.essential.essspace.HubScreen
+import com.essential.essspace.NoteDetailScreen
 import com.essential.essspace.ui.theme.EssentialSpaceTheme
 import com.essential.essspace.viewmodel.NotesListViewModel
 
 class MainActivity : ComponentActivity() {
     private lateinit var mainNavController: NavHostController
-    private var capturedPhotoPath: String? = null
     private lateinit var notesViewModel: NotesListViewModel
 
+    // Receiver to capture screenshot broadcast (if still used)
+    private val screenshotProcessedReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == ScreenshotService.ACTION_SCREENSHOT_PROCESSED) {
+                val photoPath = intent.getStringExtra(ScreenshotService.EXTRA_PHOTO_PATH)
+                val ocrText = intent.getStringExtra(ScreenshotService.EXTRA_OCR_TEXT)
+                Log.d("MainActivity", "Received screenshot broadcast. OCR text: ${ocrText?.take(100)}")
+                if (photoPath != null) {
+                    autoSavePhotoNote(photoPath, ocrText)
+                } else {
+                    Toast.makeText(context, "Error processing screenshot.", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         notesViewModel = ViewModelProvider(this)[NotesListViewModel::class.java]
+        val filter = IntentFilter(ScreenshotService.ACTION_SCREENSHOT_PROCESSED)
+        ContextCompat.registerReceiver(this, screenshotProcessedReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
+        Log.d("MainActivity", "Receiver registered.")
 
         setContent {
             EssentialSpaceTheme {
                 mainNavController = rememberNavController()
-
-                // Observe ViewModel state for dialog and capture flow
-                val showDialog = notesViewModel.showScreenshotAudioPromptDialog
-                val photoPathForDialog = notesViewModel.photoPathForScreenshotDialog // Used in AlertDialog logic
-                // val ocrTextForDialog = notesViewModel.ocrTextFromScreenshotDialog // Used in saveScreenshotNoteAsIs
-
                 NavHost(navController = mainNavController, startDestination = Screen.Home.route) {
                     composable(Screen.Home.route) {
                         HubScreen(
@@ -58,88 +74,89 @@ class MainActivity : ComponentActivity() {
                                 mainNavController.navigate(Screen.Audio.route)
                             },
                             onTakeScreenshot = {
-                                // Directly start ScreenshotCaptureActivity
                                 startActivity(Intent(this@MainActivity, ScreenshotCaptureActivity::class.java))
                             },
-
                             onNavigateToNoteDetail = { noteId ->
                                 mainNavController.navigate(Screen.NoteDetail.createRoute(noteId))
                             },
-                            onAddNewTextNote = { mainNavController.navigate(Screen.CreateTextNote.route) }
+                            onAddNewTextNote = {
+                                mainNavController.navigate(Screen.CreateTextNote.route)
+                            }
                         )
                     }
                     composable(Screen.Camera.route) {
                         CameraScreen(
                             onPhotoTaken = { photoPath, ocrResult ->
+                                // Save captured photo data and prompt for optional audio recording.
                                 notesViewModel.setCapturedDataForNote(photoPath, ocrResult)
+                                // Navigate back to Home so the optional dialog can appear.
                                 mainNavController.navigate(Screen.Audio.route)
                             },
                             onCancel = {
-                                notesViewModel.prepareForNewCapture() // Clear data on cancel
+                                notesViewModel.prepareForNewCapture()
                                 mainNavController.popBackStack()
                             }
                         )
                     }
                     composable(Screen.Audio.route) {
                         AudioRecordScreen(
-                            photoPath = notesViewModel.capturedPhotoPathForNote, // Read from ViewModel
-                            onComplete = { _, transcribedTextResult ->
+                            photoPath = notesViewModel.capturedPhotoPathForNote,
+                            onComplete = { audioPath, transcribedTextResult ->
                                 val noteTitle: String
-                                val combinedNoteTextBuilder = StringBuilder()
-
-                                val currentCapturedPhotoPath = notesViewModel.capturedPhotoPathForNote
+                                val combinedText = StringBuilder()
+                                val currentPhotoPath = notesViewModel.capturedPhotoPathForNote
                                 val currentOcrText = notesViewModel.ocrTextForCapturedPhotoNote
-
-                                if (currentCapturedPhotoPath != null) {
-                                    noteTitle = "Note for Image"
+                                if (currentPhotoPath != null) {
+                                    noteTitle = "Image Note"
                                     if (!currentOcrText.isNullOrBlank()) {
-                                        combinedNoteTextBuilder.append(currentOcrText)
+                                        combinedText.append(currentOcrText)
                                     }
                                     if (!transcribedTextResult.isNullOrBlank()) {
-                                        if (combinedNoteTextBuilder.isNotEmpty()) {
-                                            combinedNoteTextBuilder.append("\n\n---\n\n")
+                                        if (combinedText.isNotEmpty()) {
+                                            combinedText.append("\n\n---\n\n")
                                         }
-                                        combinedNoteTextBuilder.append(transcribedTextResult)
+                                        combinedText.append(transcribedTextResult)
                                     }
                                 } else {
-                                    noteTitle = if (!transcribedTextResult.isNullOrBlank()) "Transcribed Note" else "Audio Note"
+                                    noteTitle = if (!transcribedTextResult.isNullOrBlank()) "Audio Note" else "Transcribed Note"
                                     if (!transcribedTextResult.isNullOrBlank()) {
-                                        combinedNoteTextBuilder.append(transcribedTextResult)
+                                        combinedText.append(transcribedTextResult)
                                     }
                                 }
-
-                                val finalNoteText = if (combinedNoteTextBuilder.toString().isBlank()) null else combinedNoteTextBuilder.toString()
-
+                                val finalText = if (combinedText.toString().isBlank()) null else combinedText.toString()
                                 val newNote = Note(
                                     title = noteTitle,
-                                    photoPath = currentCapturedPhotoPath,
-                                    audioPath = null, // AudioRecordScreen doesn't provide audioPath
-                                    text = finalNoteText,
+                                    photoPath = currentPhotoPath,
+                                    audioPath = audioPath,
+                                    text = finalText,
                                     transcribedText = transcribedTextResult,
-                                    ocrText = if (currentCapturedPhotoPath != null) currentOcrText else null
+                                    ocrText = if (currentPhotoPath != null) currentOcrText else null
                                 )
                                 notesViewModel.insertNote(newNote)
-                                notesViewModel.prepareForNewCapture() // Clear data after saving
+                                notesViewModel.prepareForNewCapture()
                                 popToHome()
                             },
+                            onSkipAudio = {
+                                // Auto-save the note as photo-only when user skips audio.
+                                val currentPhotoPath = notesViewModel.capturedPhotoPathForNote
+                                val currentOcrText = notesViewModel.ocrTextForCapturedPhotoNote
+                                if (currentPhotoPath != null) {
+                                    autoSavePhotoNote(currentPhotoPath, currentOcrText)
+                                }
+                            },
                             onCancel = {
-                                notesViewModel.prepareForNewCapture() // Clear data on cancel
+                                notesViewModel.prepareForNewCapture()
                                 mainNavController.popBackStack()
                             }
                         )
                     }
-                    // ... (NoteDetail and CreateTextNote composables remain similar)
                     composable(
                         route = Screen.NoteDetail.route,
                         arguments = listOf(navArgument("noteId") { type = NavType.IntType })
                     ) { backStackEntry ->
                         val noteId = backStackEntry.arguments?.getInt("noteId")
                         if (noteId != null) {
-                            NoteDetailScreen(
-                                noteId = noteId,
-                                navController = mainNavController,
-                                notesViewModel = notesViewModel
-                            )
+                            NoteDetailScreen(noteId = noteId, navController = mainNavController, notesViewModel = notesViewModel)
                         } else {
                             Toast.makeText(this@MainActivity, "Error: Note ID not found.", Toast.LENGTH_LONG).show()
                             mainNavController.popBackStack()
@@ -154,30 +171,32 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                if (showDialog && photoPathForDialog != null) {
-                    Log.d("MainActivity", "AlertDialog: Composing. OCR for dialog from ViewModel: ${notesViewModel.ocrTextFromScreenshotDialog?.take(100)}")
+                // Prompt dialog for an optionally recorded audio on a captured photo note.
+                // This dialog appears if a photo was captured (from CameraScreen or screenshot) and the flag is set.
+                val showDialog by rememberUpdatedState(notesViewModel.showScreenshotAudioPromptDialog)
+                if (showDialog && notesViewModel.photoPathForScreenshotDialog != null) {
                     AlertDialog(
                         onDismissRequest = {
-                            Log.d("MainActivity", "AlertDialog: Dismissed.")
-                            saveScreenshotNoteAsIs() // Uses ViewModel data internally now
-                            // notesViewModel.clearScreenshotDialogData() // Done in saveScreenshotNoteAsIs or if navigating
+                            // If dismissed, save the note without audio.
+                            autoSavePhotoNote(notesViewModel.photoPathForScreenshotDialog!!, notesViewModel.ocrTextFromScreenshotDialog)
                         },
-                        title = { Text("Screenshot Captured") },
-                        text = { Text("Do you want to add audio to this screenshot note?") },
+                        title = { Text("Photo Captured") },
+                        text = { Text("Do you want to add audio to this photo note?") },
                         confirmButton = {
                             TextButton(onClick = {
-                                Log.d("MainActivity", "AlertDialog: 'Record Audio' clicked.")
-                                notesViewModel.prepareForAudioWithScreenshotData() // This sets capturedPhotoPathForNote & ocrTextForCapturedPhotoNote and clears dialog data
+                                // Prepare for audio recording and navigate
+                                notesViewModel.prepareForAudioWithScreenshotData()
                                 mainNavController.navigate(Screen.Audio.route)
-                                // notesViewModel.clearScreenshotDialogData() // Now handled by prepareForAudioWithScreenshotData
-                            }) { Text("Record Audio") }
+                            }) {
+                                Text("Record Audio")
+                            }
                         },
                         dismissButton = {
                             TextButton(onClick = {
-                                Log.d("MainActivity", "AlertDialog: 'Save As Is' clicked.")
-                                saveScreenshotNoteAsIs() // Uses ViewModel data internally now
-                                // notesViewModel.clearScreenshotDialogData() // Done in saveScreenshotNoteAsIs
-                            }) { Text("Save As Is") }
+                                autoSavePhotoNote(notesViewModel.photoPathForScreenshotDialog!!, notesViewModel.ocrTextFromScreenshotDialog)
+                            }) {
+                                Text("Save As Is")
+                            }
                         }
                     )
                 }
@@ -185,39 +204,20 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // ... onNewIntent
-    override fun onNewIntent(intent: Intent?) {
-        super.onNewIntent(intent)
-        setIntent(intent)
-        Log.d("MainActivity", "onNewIntent called.")
-    }
-
-    private fun saveScreenshotNoteAsIs() {
-        val path = notesViewModel.photoPathForScreenshotDialog
-        val ocr = notesViewModel.ocrTextFromScreenshotDialog
-
-        if (path == null) {
-            Log.e("MainActivity", "saveScreenshotNoteAsIs: photoPathForScreenshotDialog from ViewModel is null")
-            notesViewModel.clearScreenshotDialogData() // Clear even if path is null
-            return
-        }
-
+    private fun autoSavePhotoNote(photoPath: String, ocrText: String?) {
+        val noteTitle = if (!ocrText.isNullOrBlank()) "Photo: ${ocrText.take(30).replace("\n", " ")}..." else "Photo Note"
         val note = Note(
-            title = "Screenshot Note",
-            photoPath = path,
+            title = noteTitle,
+            photoPath = photoPath,
             audioPath = null,
-            text = ocr,
+            text = ocrText,
             transcribedText = null,
-            ocrText = ocr
+            ocrText = ocrText
         )
         notesViewModel.insertNote(note)
-        Toast.makeText(this, "Screenshot note saved.", Toast.LENGTH_SHORT).show()
-        notesViewModel.clearScreenshotDialogData() // Clear data after saving
+        Toast.makeText(this, "Photo note saved.", Toast.LENGTH_SHORT).show()
         popToHome()
     }
-
-    // REMOVE clearTemporaryNoteData and clearScreenshotDialogData from MainActivity
-    // as their logic is now in the ViewModel or handled directly where state is used.
 
     private fun popToHome() {
         if (::mainNavController.isInitialized) {
@@ -228,8 +228,19 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        Log.d("MainActivity", "onNewIntent called.")
+    }
 
-// Screen sealed class remains the same
+    override fun onDestroy() {
+        super.onDestroy()
+        unregisterReceiver(screenshotProcessedReceiver)
+        Log.d("MainActivity", "Receiver unregistered.")
+    }
+}
+
 sealed class Screen(val route: String) {
     object Home : Screen("home")
     object Camera : Screen("camera")
@@ -237,5 +248,5 @@ sealed class Screen(val route: String) {
     object NoteDetail : Screen("noteDetail/{noteId}") {
         fun createRoute(noteId: Int) = "noteDetail/$noteId"
     }
-    object CreateTextNote : Screen("createTextNote")}
+    object CreateTextNote : Screen("createTextNote")
 }
