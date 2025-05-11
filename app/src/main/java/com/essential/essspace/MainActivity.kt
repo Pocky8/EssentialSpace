@@ -29,6 +29,7 @@ import com.essential.essspace.ui.screens.CreateTextNoteScreen
 import com.essential.essspace.HubScreen
 import com.essential.essspace.NoteDetailScreen
 import com.essential.essspace.ui.theme.EssentialSpaceTheme
+import com.essential.essspace.GalleryImagePickerScreen
 import com.essential.essspace.viewmodel.NotesListViewModel
 
 class MainActivity : ComponentActivity() {
@@ -69,9 +70,13 @@ class MainActivity : ComponentActivity() {
                                 notesViewModel.prepareForNewCapture()
                                 mainNavController.navigate(Screen.Camera.route)
                             },
-                            onNavigateToAudio = {
+                            onNavigateToAudio = { // This is for direct audio note
                                 notesViewModel.prepareForNewCapture()
                                 mainNavController.navigate(Screen.Audio.route)
+                            },
+                            onNavigateToGalleryImage = { // New navigation
+                                notesViewModel.prepareForNewCapture()
+                                mainNavController.navigate(Screen.GalleryImagePicker.route)
                             },
                             onTakeScreenshot = {
                                 startActivity(Intent(this@MainActivity, ScreenshotCaptureActivity::class.java))
@@ -87,10 +92,25 @@ class MainActivity : ComponentActivity() {
                     composable(Screen.Camera.route) {
                         CameraScreen(
                             onPhotoTaken = { photoPath, ocrResult ->
-                                // Save captured photo data and prompt for optional audio recording.
                                 notesViewModel.setCapturedDataForNote(photoPath, ocrResult)
-                                // Navigate back to Home so the optional dialog can appear.
-                                mainNavController.navigate(Screen.Audio.route)
+                                mainNavController.navigate(Screen.Audio.route) {
+                                    popUpTo(Screen.Camera.route) { inclusive = true }
+                                }
+                            },
+                            onCancel = {
+                                notesViewModel.prepareForNewCapture()
+                                mainNavController.popBackStack()
+                            }
+                        )
+                    }
+                    composable(Screen.GalleryImagePicker.route) { // New route
+                        GalleryImagePickerScreen(
+                            onImageProcessed = { imagePath, ocrText ->
+                                notesViewModel.setCapturedDataForNote(imagePath, ocrText)
+                                // Navigate to Audio screen for optional audio, similar to camera flow
+                                mainNavController.navigate(Screen.Audio.route) {
+                                    popUpTo(Screen.GalleryImagePicker.route) { inclusive = true }
+                                }
                             },
                             onCancel = {
                                 notesViewModel.prepareForNewCapture()
@@ -244,6 +264,7 @@ class MainActivity : ComponentActivity() {
 sealed class Screen(val route: String) {
     object Home : Screen("home")
     object Camera : Screen("camera")
+    object GalleryImagePicker : Screen("galleryImagePicker") // New screen route
     object Audio : Screen("audio")
     object NoteDetail : Screen("noteDetail/{noteId}") {
         fun createRoute(noteId: Int) = "noteDetail/$noteId"
