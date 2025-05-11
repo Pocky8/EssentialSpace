@@ -30,7 +30,7 @@ fun NotesListScreen(
     onNoteClick: (Int) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val notesList by notesViewModel.allNotes.collectAsState(initial = emptyList())
+    val notesList by notesViewModel.getAllNotes().collectAsState(initial = emptyList())
 
     if (notesList.isEmpty()) {
         Box(modifier = modifier.fillMaxSize().padding(16.dp), contentAlignment = Alignment.Center) {

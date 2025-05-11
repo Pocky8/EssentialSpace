@@ -19,7 +19,8 @@ import kotlinx.coroutines.launch
 class NotesListViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository: NoteRepository
-    val allNotes: StateFlow<List<Note>>
+    // Change: Rename 'allNotes' to a private backing field
+    private val _notesStateFlow: StateFlow<List<Note>>
 
     var capturedPhotoPathForNote by mutableStateOf<String?>(null)
         private set
@@ -38,12 +39,18 @@ class NotesListViewModel(application: Application) : AndroidViewModel(applicatio
     init {
         val noteDao = AppDatabase.getDatabase(application).noteDao()
         repository = NoteRepository(application)
-        allNotes = repository.getAllNotesFlow()
+        // Change: Initialize the private backing field
+        _notesStateFlow = repository.getAllNotesFlow()
             .stateIn(
                 scope = viewModelScope,
                 started = SharingStarted.WhileSubscribed(5000),
                 initialValue = emptyList()
             )
+    }
+
+    // Change: Add public function to expose the StateFlow
+    fun getAllNotes(): StateFlow<List<Note>> {
+        return _notesStateFlow
     }
 
     fun insertNote(note: Note, callback: ((Long) -> Unit)? = null) = viewModelScope.launch {
