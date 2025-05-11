@@ -1,6 +1,8 @@
 package com.essential.essspace
 
 import android.graphics.BitmapFactory
+import android.graphics.Bitmap
+import com.essential.essspace.BitmapUtils
 import android.net.Uri
 import android.util.Log
 import android.widget.Toast
@@ -29,7 +31,6 @@ import java.io.File
 
 @Composable
 fun CameraScreen(
-    // Updated signature to include OCR text
     onPhotoTaken: (photoPath: String, ocrText: String?) -> Unit,
     onCancel: () -> Unit
 ) {
@@ -42,7 +43,7 @@ fun CameraScreen(
     val photoUri: Uri = remember(imageFile) {
         FileProvider.getUriForFile(
             context,
-            "${context.packageName}.provider", // Make sure this matches your manifest
+            "${context.packageName}.provider",
             imageFile
         )
     }
@@ -51,11 +52,24 @@ fun CameraScreen(
         if (success) {
             showProcessingIndicator = true
             Log.d("CameraScreen", "Photo taken successfully. Path: ${imageFile.absolutePath}")
-            coroutineScope.launch { // Perform OCR in a coroutine
+            coroutineScope.launch {
+                var originalBitmap: Bitmap? = null
+                var bitmapForOcr: Bitmap? = null // Declare bitmapForOcr here
                 try {
-                    val bitmap = BitmapFactory.decodeFile(imageFile.absolutePath)
-                    if (bitmap != null) {
-                        val image = InputImage.fromBitmap(bitmap, 0) // Assuming 0 rotation
+                    originalBitmap = BitmapFactory.decodeFile(imageFile.absolutePath)
+                    if (originalBitmap != null) {
+                        // Resize the bitmap for OCR
+                        bitmapForOcr = BitmapUtils.getResizedBitmapForOcr(originalBitmap)
+
+                        if (bitmapForOcr == null) {
+                            Log.e("CameraScreen", "Bitmap for OCR is null after resize attempt.")
+                            Toast.makeText(context, "Failed to process image (resize error).", Toast.LENGTH_SHORT).show()
+                            showProcessingIndicator = false
+                            onPhotoTaken(imageFile.absolutePath, null)
+                            return@launch
+                        }
+
+                        val image = InputImage.fromBitmap(bitmapForOcr!!, 0) // Use the (potentially resized) bitmapForOcr
                         val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
 
                         recognizer.process(image)
@@ -63,29 +77,41 @@ fun CameraScreen(
                                 val ocrResult = visionText.text
                                 Log.d("CameraScreen", "ML Kit OCR successful. Text: ${ocrResult.take(100)}")
                                 showProcessingIndicator = false
-                                // Instead of navigating directly to Audio, set the captured data:
                                 onPhotoTaken(imageFile.absolutePath, ocrResult.ifBlank { null })
                             }
                             .addOnFailureListener { e ->
                                 Log.e("CameraScreen", "ML Kit OCR failed for camera image", e)
                                 Toast.makeText(context, "OCR failed: ${e.message}", Toast.LENGTH_SHORT).show()
                                 showProcessingIndicator = false
-                                onPhotoTaken(imageFile.absolutePath, null) // Proceed with photo, null OCR
+                                onPhotoTaken(imageFile.absolutePath, null)
                             }
                             .addOnCompleteListener {
-                                bitmap.recycle() // Recycle bitmap after processing
+                                // Recycle the bitmap that was used for OCR
+                                if (bitmapForOcr?.isRecycled == false) {
+                                    bitmapForOcr.recycle()
+                                    Log.d("CameraScreen", "bitmapForOcr recycled in onComplete.")
+                                }
+                                // originalBitmap is recycled by BitmapUtils.getResizedBitmapForOcr if a new bitmap was created
                             }
                     } else {
-                        Log.e("CameraScreen", "Failed to decode bitmap from file.")
+                        Log.e("CameraScreen", "Failed to decode original bitmap from file.")
                         Toast.makeText(context, "Failed to process image.", Toast.LENGTH_SHORT).show()
                         showProcessingIndicator = false
-                        onPhotoTaken(imageFile.absolutePath, null) // Proceed with photo, null OCR
+                        onPhotoTaken(imageFile.absolutePath, null)
                     }
                 } catch (e: Exception) {
                     Log.e("CameraScreen", "Error processing image for OCR", e)
-                    Toast.makeText(context, "Error processing image.", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "Error processing image: ${e.message}", Toast.LENGTH_SHORT).show()
                     showProcessingIndicator = false
                     onPhotoTaken(imageFile.absolutePath, null)
+                    // Ensure bitmapForOcr is recycled in case of an earlier exception
+                    if (bitmapForOcr?.isRecycled == false) {
+                        bitmapForOcr.recycle()
+                        Log.d("CameraScreen", "bitmapForOcr recycled in catch block.")
+                    }
+                    // If originalBitmap was decoded but not passed to BitmapUtils or if BitmapUtils didn't recycle it (e.g. no resize)
+                    // and it's different from bitmapForOcr, it might also need recycling here.
+                    // However, getResizedBitmapForOcr should handle the original.
                 }
             }
         } else {
@@ -95,7 +121,6 @@ fun CameraScreen(
     }
 
     LaunchedEffect(Unit) {
-        // Ensure the file exists or can be created before launching
         try {
             if (!imageFile.exists()) {
                 imageFile.createNewFile()
@@ -111,8 +136,8 @@ fun CameraScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black), // Keep background black for camera preview
-        contentAlignment = Alignment.Center // Center the processing indicator
+            .background(Color.Black),
+        contentAlignment = Alignment.Center
     ) {
         if (showProcessingIndicator) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -121,10 +146,9 @@ fun CameraScreen(
                 Text("Processing Image...", color = Color.White)
             }
         }
-        // IconButton for cancel should be at TopStart
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.TopStart) {
             IconButton(onClick = {
-                if (!showProcessingIndicator) { // Allow cancel if not processing
+                if (!showProcessingIndicator) {
                     onCancel()
                 }
             }, modifier = Modifier.padding(16.dp)) {
