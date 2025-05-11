@@ -23,16 +23,14 @@ import android.util.Log
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
-import com.essential.essspace.room.Note // Assuming you want to save to Room
-import com.essential.essspace.room.NoteRepository // Assuming you want to save to Room
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
+import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.text.TextRecognition
+import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import java.io.File
 import java.io.FileOutputStream
 
 class ScreenshotService : Service() {
-
+    private var hasCapturedImage = false
     private lateinit var mediaProjectionManager: MediaProjectionManager
     private var mediaProjection: MediaProjection? = null
     private var virtualDisplay: VirtualDisplay? = null
@@ -40,8 +38,7 @@ class ScreenshotService : Service() {
     private lateinit var windowManager: WindowManager
     private lateinit var handler: Handler
     private lateinit var handlerThread: HandlerThread
-    private lateinit var noteRepository: NoteRepository
-
+    private lateinit var textRecognizer: com.google.mlkit.vision.text.TextRecognizer
 
     companion object {
         const val ACTION_START = "com.essential.essspace.ACTION_START_SCREENSHOT"
@@ -51,6 +48,11 @@ class ScreenshotService : Service() {
         private const val NOTIFICATION_ID = 123
         private const val VIRTUAL_DISPLAY_NAME = "EssspaceScreenshot"
         private const val TAG = "ScreenshotService"
+
+        // Broadcast action and extras:
+        const val ACTION_SCREENSHOT_PROCESSED = "com.essential.essspace.ACTION_SCREENSHOT_PROCESSED"
+        const val EXTRA_PHOTO_PATH = "extra_photo_path"
+        const val EXTRA_OCR_TEXT = "extra_ocr_text"
     }
 
     override fun onCreate() {
@@ -58,8 +60,7 @@ class ScreenshotService : Service() {
         Log.d(TAG, "onCreate")
         mediaProjectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
-        noteRepository = NoteRepository(applicationContext) // Initialize repository
-
+        textRecognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
 
         handlerThread = HandlerThread("ScreenshotHandlerThread")
         handlerThread.start()
@@ -77,28 +78,25 @@ class ScreenshotService : Service() {
             if (resultCode == Activity.RESULT_OK && data != null) {
                 Log.d(TAG, "Permission granted, starting foreground service.")
                 startForeground(NOTIFICATION_ID, createNotification())
-
-                // Delay slightly to allow system to prepare, then get projection
                 handler.postDelayed({
                     try {
                         mediaProjection = mediaProjectionManager.getMediaProjection(resultCode, data)
                         if (mediaProjection == null) {
                             Log.e(TAG, "MediaProjection is null after getMediaProjection")
-                            stopSelfService("MediaProjection is null after getMediaProjection")
+                            stopSelfService("MediaProjection is null")
                             return@postDelayed
                         }
                         Log.d(TAG, "MediaProjection obtained.")
                         mediaProjection?.registerCallback(MediaProjectionCallback(), handler)
-                        Log.d(TAG, "MediaProjection callback registered.")
                         setupVirtualDisplay()
                     } catch (e: Exception) {
                         Log.e(TAG, "Error starting projection: ${e.message}", e)
                         stopSelfService("Error starting projection: ${e.message}")
                     }
-                }, 300) // 300ms delay
+                }, 300)
             } else {
                 Log.e(TAG, "Result code not OK or data is null. ResultCode: $resultCode")
-                stopSelfService("Result code not OK or data is null")
+                stopSelfService("Permission denied or data null")
             }
         } else {
             Log.w(TAG, "Unknown action or null intent. Action: ${intent?.action}")
@@ -107,13 +105,12 @@ class ScreenshotService : Service() {
         return START_NOT_STICKY
     }
 
-
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val serviceChannel = NotificationChannel(
                 NOTIFICATION_CHANNEL_ID,
                 "Screenshot Service Channel",
-                NotificationManager.IMPORTANCE_LOW // Use LOW to avoid sound/pop-up if not critical
+                NotificationManager.IMPORTANCE_LOW
             )
             val manager = getSystemService(NotificationManager::class.java)
             manager?.createNotificationChannel(serviceChannel)
@@ -142,7 +139,7 @@ class ScreenshotService : Service() {
 
         if (screenWidth <= 0 || screenHeight <= 0) {
             Log.e(TAG, "Invalid screen dimensions: $screenWidth x $screenHeight")
-            stopSelfService("Invalid screen dimensions: $screenWidth x $screenHeight")
+            stopSelfService("Invalid screen dimensions")
             return
         }
         Log.d(TAG, "Screen dimensions: $screenWidth x $screenHeight @ $screenDensity dpi")
@@ -151,9 +148,13 @@ class ScreenshotService : Service() {
         Log.d(TAG, "ImageReader created.")
 
         imageReader?.setOnImageAvailableListener({ reader ->
+            // If we already processed one image, ignore further images.
+            if (hasCapturedImage) {
+                return@setOnImageAvailableListener
+            }
             Log.d(TAG, "Image available in ImageReader.")
             var image: android.media.Image? = null
-            var bitmap: Bitmap? = null
+            var tempBitmap: Bitmap? = null
             var croppedBitmapToSave: Bitmap? = null
             try {
                 image = reader.acquireLatestImage()
@@ -165,49 +166,59 @@ class ScreenshotService : Service() {
                     val rowStride = planes[0].rowStride
                     val rowPadding = rowStride - pixelStride * screenWidth
 
-                    val tempBitmap = Bitmap.createBitmap(
+                    tempBitmap = Bitmap.createBitmap(
                         screenWidth + rowPadding / pixelStride,
                         screenHeight,
                         Bitmap.Config.ARGB_8888
                     )
                     tempBitmap.copyPixelsFromBuffer(buffer)
 
-                    // Crop to actual screen dimensions if necessary
                     croppedBitmapToSave = if (rowPadding > 0 || tempBitmap.width != screenWidth || tempBitmap.height != screenHeight) {
                         Log.d(TAG, "Cropping bitmap.")
                         Bitmap.createBitmap(tempBitmap, 0, 0, screenWidth, screenHeight)
                     } else {
-                        Log.d(TAG, "Using original bitmap (no cropping needed).")
-                        tempBitmap // Use the original if no cropping needed
+                        tempBitmap
                     }
 
-                    if (croppedBitmapToSave != tempBitmap) { // if a new bitmap was created by cropping
+                    if (croppedBitmapToSave != tempBitmap && tempBitmap != null && !tempBitmap.isRecycled) {
                         tempBitmap.recycle()
                     }
 
-                    saveBitmap(croppedBitmapToSave) // Pass the final bitmap to save
-                    Toast.makeText(this, "Screenshot saved!", Toast.LENGTH_SHORT).show()
-                    Log.i(TAG, "Screenshot processed and saved.")
+                    if (croppedBitmapToSave != null) {
+                        // Mark that we've captured an image so further images are ignored.
+                        hasCapturedImage = true
+                        // Remove listener to prevent further callbacks.
+                        imageReader?.setOnImageAvailableListener(null, handler)
+                        // Show toast “screenshot is being saved” on the main thread
+                        Handler(mainLooper).post {
+                            Toast.makeText(applicationContext, "Screenshot is being saved...", Toast.LENGTH_SHORT).show()
+                        }
+                        performOcrAndSaveFile(croppedBitmapToSave)
+                    } else {
+                        Log.w(TAG, "Cropped bitmap is null.")
+                        stopSelfService("Cropped bitmap was null")
+                    }
                 } else {
                     Log.w(TAG, "Acquired image was null.")
+                    stopSelfService("Acquired image was null")
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Error processing image: ${e.message}", e)
-                Toast.makeText(this, "Error processing screenshot: ${e.message}", Toast.LENGTH_LONG).show()
+                Handler(mainLooper).post {
+                    Toast.makeText(this, "Error processing screenshot: ${e.message}", Toast.LENGTH_LONG).show()
+                }
+                croppedBitmapToSave?.recycle()
+                tempBitmap?.recycle()
+                stopSelfService("Error processing image")
             } finally {
                 image?.close()
-                // The bitmap passed to saveBitmap should be recycled there if it's a copy,
-                // or after use if it's the original.
-                // For simplicity, let saveBitmap handle its input.
-                // croppedBitmapToSave?.recycle() // Don't recycle here if saveBitmap needs it.
-                stopSelfService() // Stop after attempting capture
             }
         }, handler)
 
         try {
             if (mediaProjection == null) {
                 Log.e(TAG, "MediaProjection became null before creating VirtualDisplay")
-                stopSelfService("MediaProjection became null before creating VirtualDisplay")
+                stopSelfService("MediaProjection became null")
                 return
             }
             Log.d(TAG, "Creating virtual display.")
@@ -227,21 +238,30 @@ class ScreenshotService : Service() {
             } else {
                 Log.d(TAG, "Virtual display created successfully.")
             }
-        } catch (e: SecurityException) {
-            Log.e(TAG, "SecurityException creating VirtualDisplay: ${e.message}", e)
-            stopSelfService("SecurityException creating VirtualDisplay: ${e.message}")
-        } catch (e: IllegalStateException) {
-            Log.e(TAG, "IllegalStateException creating VirtualDisplay: ${e.message}", e)
-            stopSelfService("IllegalStateException creating VirtualDisplay: ${e.message}")
-        }
-        catch (e: Exception) {
-            Log.e(TAG, "Generic error creating VirtualDisplay: ${e.message}", e)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error creating VirtualDisplay: ${e.message}", e)
             stopSelfService("Error creating VirtualDisplay: ${e.message}")
         }
     }
 
+    private fun performOcrAndSaveFile(bitmap: Bitmap) {
+        val inputImage = InputImage.fromBitmap(bitmap, 0)
+        textRecognizer.process(inputImage)
+            .addOnSuccessListener { visionText ->
+                val ocrResultText = visionText.text
+                Log.d(TAG, "OCR successful: ${ocrResultText.take(150)}")
+                saveFileAndBroadcast(bitmap, ocrResultText)
+            }
+            .addOnFailureListener { e ->
+                Log.e(TAG, "OCR failed", e)
+                Handler(mainLooper).post {
+                    Toast.makeText(applicationContext, "OCR failed: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+                saveFileAndBroadcast(bitmap, null)
+            }
+    }
 
-    private fun saveBitmap(bitmapToSave: Bitmap) {
+    private fun saveFileAndBroadcast(bitmapToSave: Bitmap, ocrText: String?) {
         val screenshotsDir = File(getExternalFilesDir(null), "Screenshots_Essspace")
         if (!screenshotsDir.exists()) {
             screenshotsDir.mkdirs()
@@ -249,72 +269,69 @@ class ScreenshotService : Service() {
         val fileName = "screenshot_${System.currentTimeMillis()}.png"
         val file = File(screenshotsDir, fileName)
         Log.d(TAG, "Attempting to save screenshot to: ${file.absolutePath}")
+        var success = false
         try {
             FileOutputStream(file).use { out ->
                 bitmapToSave.compress(Bitmap.CompressFormat.PNG, 100, out)
                 Log.i(TAG, "Screenshot bitmap compressed and saved to: ${file.absolutePath}")
             }
-            // Save to Room Database
-            CoroutineScope(Dispatchers.IO).launch {
-                val newNote = Note(photoPath = file.absolutePath, audioPath = null, text = "Screenshot: $fileName")
-                noteRepository.insertNote(newNote) // Use the initialized repository
-                Log.d(TAG, "Screenshot metadata saved to Room database.")
+            success = true
+            // Instead of showing file path then OCR text,
+            // the broadcast carries the OCR result (if any)
+            Handler(mainLooper).post {
+                Toast.makeText(applicationContext, "Screenshot captured and processed!", Toast.LENGTH_SHORT).show()
             }
+            val processedIntent = Intent(ACTION_SCREENSHOT_PROCESSED).apply {
+                putExtra(EXTRA_PHOTO_PATH, file.absolutePath)
+                putExtra(EXTRA_OCR_TEXT, ocrText)
+                setPackage(packageName)
+            }
+            sendBroadcast(processedIntent)
+            Log.d(TAG, "Broadcast sent with OCR text.")
         } catch (e: Exception) {
-            Log.e(TAG, "Error saving bitmap to file or DB: ${e.message}", e)
+            Log.e(TAG, "Error saving bitmap: ${e.message}", e)
+            Handler(mainLooper).post {
+                Toast.makeText(applicationContext, "Failed to save screenshot file.", Toast.LENGTH_LONG).show()
+            }
         } finally {
             if (!bitmapToSave.isRecycled) {
-                // bitmapToSave.recycle() // Recycle after saving if it's no longer needed.
-                // Be cautious if any async operations still need it.
-                // For this flow, it should be safe to recycle.
+                bitmapToSave.recycle()
+                Log.d(TAG, "Bitmap recycled in saveFileAndBroadcast.")
             }
+            stopSelfService(if(success) "Processing complete." else "File save error or OCR issue.")
         }
     }
-
 
     private inner class MediaProjectionCallback : MediaProjection.Callback() {
         override fun onStop() {
             super.onStop()
             Log.w(TAG, "MediaProjection.Callback onStop called.")
-            releaseResources()
-            // Consider stopping the service if projection stops unexpectedly
-            // stopSelfService("MediaProjection stopped via callback")
         }
     }
 
     private fun releaseResources() {
         Log.d(TAG, "Releasing resources...")
+        handler.removeCallbacksAndMessages(null)
         virtualDisplay?.release()
         virtualDisplay = null
-        imageReader?.close() // Close the reader to free up its surface
+        imageReader?.close()
         imageReader = null
-        if (mediaProjection != null) {
-            mediaProjection?.unregisterCallback(MediaProjectionCallback()) // Unregister before stopping
-            mediaProjection?.stop()
-            mediaProjection = null
-            Log.d(TAG, "MediaProjection resources released.")
-        }
+        mediaProjection?.stop()
+        mediaProjection = null
     }
 
     private fun stopSelfService(reason: String? = null) {
         if (reason != null) {
-            Log.e(TAG, "Stopping service: $reason")
-            Toast.makeText(this, "Screenshot failed: $reason", Toast.LENGTH_LONG).show()
-        } else {
-            Log.i(TAG, "Stopping service normally.")
+            Log.i(TAG, "Stopping service: $reason")
         }
         releaseResources()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             stopForeground(STOP_FOREGROUND_REMOVE)
         } else {
-            @Suppress("DEPRECATION")
             stopForeground(true)
         }
         stopSelf()
-        if (::handlerThread.isInitialized && handlerThread.isAlive) {
-            handlerThread.quitSafely()
-            Log.d(TAG, "HandlerThread quit.")
-        }
+        Log.d(TAG, "stopSelf() called.")
     }
 
     override fun onBind(intent: Intent?): IBinder? {
@@ -325,6 +342,10 @@ class ScreenshotService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         Log.d(TAG, "onDestroy called.")
-        stopSelfService("Service destroyed")
+        releaseResources()
+        if (::handlerThread.isInitialized && handlerThread.isAlive) {
+            handlerThread.quitSafely()
+            Log.d(TAG, "HandlerThread quit.")
+        }
     }
 }

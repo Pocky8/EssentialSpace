@@ -1,84 +1,107 @@
 package com.essential.essspace.viewmodel
 
 import android.app.Application
+import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.essential.essspace.room.Note
+import com.essential.essspace.room.AppDatabase
 import com.essential.essspace.room.NoteRepository
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 class NotesListViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository: NoteRepository
-    val allNotes: Flow<List<Note>>
+    val allNotes: StateFlow<List<Note>>
 
-    // --- State for photo capture / screenshot-to-audio flow ---
-    var capturedPhotoPathForNote: String? by mutableStateOf(null)
+    var capturedPhotoPathForNote by mutableStateOf<String?>(null)
         private set
-    var ocrTextForCapturedPhotoNote: String? by mutableStateOf(null)
+    var ocrTextForCapturedPhotoNote by mutableStateOf<String?>(null)
         private set
+    var audioFilePathForNote by mutableStateOf<String?>(null)
+    // Remove custom function setAudioFilePathForNote; use property setter directly.
 
-    // --- State specifically for screenshot flow dialog ---
-    var showScreenshotAudioPromptDialog: Boolean by mutableStateOf(false)
+    var showScreenshotAudioPromptDialog by mutableStateOf(false)
         private set
-    var photoPathForScreenshotDialog: String? by mutableStateOf(null)
+    var photoPathForScreenshotDialog by mutableStateOf<String?>(null)
         private set
-    var ocrTextFromScreenshotDialog: String? by mutableStateOf(null)
+    var ocrTextFromScreenshotDialog by mutableStateOf<String?>(null)
         private set
 
     init {
+        val noteDao = AppDatabase.getDatabase(application).noteDao()
         repository = NoteRepository(application)
         allNotes = repository.getAllNotesFlow()
+            .stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.WhileSubscribed(5000),
+                initialValue = emptyList()
+            )
     }
 
-    fun insertNote(note: Note) = viewModelScope.launch {
-        repository.insertNote(note)
+    fun insertNote(note: Note, callback: ((Long) -> Unit)? = null) = viewModelScope.launch {
+        val rowId = repository.insertNote(note)
+        Log.d("ViewModel", "Note inserted with ID: $rowId, Title: ${note.title}")
+        callback?.invoke(rowId)
     }
 
     fun updateNote(note: Note) = viewModelScope.launch {
         repository.updateNote(note)
+        Log.d("ViewModel", "Note updated: ID: ${note.id}")
     }
 
-    fun getNoteById(id: Int): Flow<Note?> {
-        return repository.getNoteByIdFlow(id)
+    fun deleteNote(note: Note) = viewModelScope.launch {
+        repository.deleteNoteById(note.id)
+        Log.d("ViewModel", "Note delete requested for ID: ${note.id}")
     }
 
-    fun deleteNoteById(id: Int) = viewModelScope.launch {
-        repository.deleteNoteById(id)
+    fun deleteNoteById(noteId: Int) = viewModelScope.launch {
+        repository.deleteNoteById(noteId)
+        Log.d("ViewModel", "Note delete requested for ID: $noteId")
     }
 
-    // --- Methods to manage screenshot dialog state ---
-    fun onScreenshotBroadcastReceived(path: String, ocrText: String?) {
+    fun getNoteByIdFlow(noteId: Int): Flow<Note?> {
+        return repository.getNoteByIdFlow(noteId)
+    }
+
+    fun prepareForNewCapture() {
+        Log.d("ViewModel", "Clearing temporary note data.")
+        capturedPhotoPathForNote = null
+        ocrTextForCapturedPhotoNote = null
+        audioFilePathForNote = null
+    }
+
+    fun setCapturedDataForNote(photoPath: String?, ocrText: String?) {
+        Log.d("ViewModel", "Captured data - Photo: $photoPath, OCR: ${ocrText?.take(50)}")
+        capturedPhotoPathForNote = photoPath
+        ocrTextForCapturedPhotoNote = ocrText
+    }
+
+    fun handleScreenshotProcessed(path: String, ocrText: String?) {
+        Log.d("ViewModel", "Screenshot processed - Path: $path, OCR: ${ocrText?.take(50)}")
         photoPathForScreenshotDialog = path
         ocrTextFromScreenshotDialog = ocrText
         showScreenshotAudioPromptDialog = true
     }
 
-    fun clearScreenshotDialogData() {
-        photoPathForScreenshotDialog = null
-        ocrTextFromScreenshotDialog = null
-        showScreenshotAudioPromptDialog = false
-    }
-
-    // --- Methods to manage general capture flow state (camera or screenshot chosen for audio) ---
-    fun prepareForNewCapture() {
-        capturedPhotoPathForNote = null
-        ocrTextForCapturedPhotoNote = null
-    }
-
-    fun setCapturedDataForNote(photoPath: String?, ocrText: String?) {
-        capturedPhotoPathForNote = photoPath
-        ocrTextForCapturedPhotoNote = ocrText
-    }
-
     fun prepareForAudioWithScreenshotData() {
+        Log.d("ViewModel", "Transferring screenshot data.")
         capturedPhotoPathForNote = photoPathForScreenshotDialog
         ocrTextForCapturedPhotoNote = ocrTextFromScreenshotDialog
-        // Dialog specific data can be cleared after transferring to general capture flow
         clearScreenshotDialogData()
+    }
+
+    fun clearScreenshotDialogData() {
+        Log.d("ViewModel", "Clearing screenshot dialog data.")
+        showScreenshotAudioPromptDialog = false
+        photoPathForScreenshotDialog = null
+        ocrTextFromScreenshotDialog = null
     }
 }
