@@ -1,6 +1,7 @@
 package com.essential.essspace
 
 import android.graphics.Bitmap
+import com.essential.essspace.TextCleanupUtils
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.util.Log
@@ -79,10 +80,11 @@ fun GalleryImagePickerScreen(
 
                         recognizer.process(image)
                             .addOnSuccessListener { visionText ->
-                                val ocrResult = visionText.text
-                                Log.d("GalleryImagePicker", "ML Kit OCR successful. Text: ${ocrResult.take(100)}")
+                                val rawOcrResult = visionText.text
+                                val cleanedOcrResult = TextCleanupUtils.cleanOcrText(rawOcrResult)
+                                Log.d("GalleryImagePicker", "ML Kit OCR successful. Raw: ${rawOcrResult.take(100)}, Cleaned: ${cleanedOcrResult?.take(100)}")
                                 showProcessingIndicator = false
-                                onImageProcessed(imageFilePath, ocrResult.ifBlank { null })
+                                onImageProcessed(imageFilePath, cleanedOcrResult) // Pass cleaned text
                             }
                             .addOnFailureListener { e ->
                                 Log.e("GalleryImagePicker", "ML Kit OCR failed for gallery image", e)
