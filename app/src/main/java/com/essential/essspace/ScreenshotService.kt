@@ -18,11 +18,13 @@ import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.IBinder
+import android.os.Looper
 import android.util.DisplayMetrics
 import android.util.Log
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
+import com.essential.essspace.BitmapUtils // Make sure this path is correct
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
@@ -36,7 +38,7 @@ class ScreenshotService : Service() {
     private var virtualDisplay: VirtualDisplay? = null
     private var imageReader: ImageReader? = null
     private lateinit var windowManager: WindowManager
-    private lateinit var handler: Handler
+    private lateinit var serviceHandler: Handler
     private lateinit var handlerThread: HandlerThread
     private lateinit var textRecognizer: com.google.mlkit.vision.text.TextRecognizer
 
@@ -49,7 +51,6 @@ class ScreenshotService : Service() {
         private const val VIRTUAL_DISPLAY_NAME = "EssspaceScreenshot"
         private const val TAG = "ScreenshotService"
 
-        // Broadcast action and extras:
         const val ACTION_SCREENSHOT_PROCESSED = "com.essential.essspace.ACTION_SCREENSHOT_PROCESSED"
         const val EXTRA_PHOTO_PATH = "extra_photo_path"
         const val EXTRA_OCR_TEXT = "extra_ocr_text"
@@ -64,7 +65,7 @@ class ScreenshotService : Service() {
 
         handlerThread = HandlerThread("ScreenshotHandlerThread")
         handlerThread.start()
-        handler = Handler(handlerThread.looper)
+        serviceHandler = Handler(handlerThread.looper)
 
         createNotificationChannel()
     }
@@ -78,7 +79,7 @@ class ScreenshotService : Service() {
             if (resultCode == Activity.RESULT_OK && data != null) {
                 Log.d(TAG, "Permission granted, starting foreground service.")
                 startForeground(NOTIFICATION_ID, createNotification())
-                handler.postDelayed({
+                serviceHandler.postDelayed({
                     try {
                         mediaProjection = mediaProjectionManager.getMediaProjection(resultCode, data)
                         if (mediaProjection == null) {
@@ -87,7 +88,7 @@ class ScreenshotService : Service() {
                             return@postDelayed
                         }
                         Log.d(TAG, "MediaProjection obtained.")
-                        mediaProjection?.registerCallback(MediaProjectionCallback(), handler)
+                        mediaProjection?.registerCallback(MediaProjectionCallback(), serviceHandler)
                         setupVirtualDisplay()
                     } catch (e: Exception) {
                         Log.e(TAG, "Error starting projection: ${e.message}", e)
@@ -112,8 +113,7 @@ class ScreenshotService : Service() {
                 "Screenshot Service Channel",
                 NotificationManager.IMPORTANCE_LOW
             )
-            val manager = getSystemService(NotificationManager::class.java)
-            manager?.createNotificationChannel(serviceChannel)
+            getSystemService(NotificationManager::class.java)?.createNotificationChannel(serviceChannel)
             Log.d(TAG, "Notification channel created.")
         }
     }
@@ -131,7 +131,13 @@ class ScreenshotService : Service() {
     private fun setupVirtualDisplay() {
         Log.d(TAG, "Setting up virtual display.")
         val displayMetrics = DisplayMetrics()
-        windowManager.defaultDisplay.getRealMetrics(displayMetrics)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val display = windowManager.defaultDisplay
+            display.getRealMetrics(displayMetrics)
+        } else {
+            @Suppress("DEPRECATION")
+            windowManager.defaultDisplay.getRealMetrics(displayMetrics)
+        }
 
         val screenWidth = displayMetrics.widthPixels
         val screenHeight = displayMetrics.heightPixels
@@ -148,17 +154,19 @@ class ScreenshotService : Service() {
         Log.d(TAG, "ImageReader created.")
 
         imageReader?.setOnImageAvailableListener({ reader ->
-            // If we already processed one image, ignore further images.
             if (hasCapturedImage) {
+                Log.d(TAG, "Image available, but already captured one. Ignoring and closing.")
+                reader.acquireLatestImage()?.close()
                 return@setOnImageAvailableListener
             }
             Log.d(TAG, "Image available in ImageReader.")
             var image: android.media.Image? = null
             var tempBitmap: Bitmap? = null
-            var croppedBitmapToSave: Bitmap? = null
+            var finalBitmapToProcess: Bitmap? = null
             try {
                 image = reader.acquireLatestImage()
                 if (image != null) {
+                    hasCapturedImage = true // Set flag: we are processing this image.
                     Log.d(TAG, "Image acquired from reader.")
                     val planes = image.planes
                     val buffer = planes[0].buffer
@@ -173,47 +181,44 @@ class ScreenshotService : Service() {
                     )
                     tempBitmap.copyPixelsFromBuffer(buffer)
 
-                    croppedBitmapToSave = if (rowPadding > 0 || tempBitmap.width != screenWidth || tempBitmap.height != screenHeight) {
-                        Log.d(TAG, "Cropping bitmap.")
+                    finalBitmapToProcess = if (rowPadding > 0 || tempBitmap.width != screenWidth || tempBitmap.height != screenHeight) {
+                        Log.d(TAG, "Cropping bitmap from ${tempBitmap.width}x${tempBitmap.height} to ${screenWidth}x${screenHeight}.")
                         Bitmap.createBitmap(tempBitmap, 0, 0, screenWidth, screenHeight)
                     } else {
                         tempBitmap
                     }
 
-                    if (croppedBitmapToSave != tempBitmap && tempBitmap != null && !tempBitmap.isRecycled) {
+                    if (finalBitmapToProcess != tempBitmap && tempBitmap != null && !tempBitmap.isRecycled) {
+                        Log.d(TAG, "Recycling tempBitmap after cropping.")
                         tempBitmap.recycle()
                     }
+                    tempBitmap = null // Avoid re-recycling
 
-                    if (croppedBitmapToSave != null) {
-                        // Mark that we've captured an image so further images are ignored.
-                        hasCapturedImage = true
-                        // Remove listener to prevent further callbacks.
-                        imageReader?.setOnImageAvailableListener(null, handler)
-                        // Show toast “screenshot is being saved” on the main thread
-                        Handler(mainLooper).post {
+                    if (finalBitmapToProcess != null) {
+                        imageReader?.setOnImageAvailableListener(null, serviceHandler) // Stop listening
+                        Handler(Looper.getMainLooper()).post {
                             Toast.makeText(applicationContext, "Screenshot is being saved...", Toast.LENGTH_SHORT).show()
                         }
-                        performOcrAndSaveFile(croppedBitmapToSave)
+                        performOcrAndSaveFile(finalBitmapToProcess) // This bitmap will be recycled by performOcrAndSaveFile/saveFileAndBroadcast
                     } else {
-                        Log.w(TAG, "Cropped bitmap is null.")
-                        stopSelfService("Cropped bitmap was null")
+                        Log.w(TAG, "Final bitmap to process is null.")
+                        stopSelfService("Final bitmap was null")
                     }
                 } else {
-                    Log.w(TAG, "Acquired image was null.")
-                    stopSelfService("Acquired image was null")
+                    Log.w(TAG, "Acquired image was null. Waiting for next if any.")
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Error processing image: ${e.message}", e)
-                Handler(mainLooper).post {
+                Handler(Looper.getMainLooper()).post {
                     Toast.makeText(this, "Error processing screenshot: ${e.message}", Toast.LENGTH_LONG).show()
                 }
-                croppedBitmapToSave?.recycle()
+                finalBitmapToProcess?.recycle()
                 tempBitmap?.recycle()
                 stopSelfService("Error processing image")
             } finally {
                 image?.close()
             }
-        }, handler)
+        }, serviceHandler)
 
         try {
             if (mediaProjection == null) {
@@ -230,7 +235,7 @@ class ScreenshotService : Service() {
                 DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
                 imageReader?.surface,
                 null,
-                handler
+                serviceHandler
             )
             if (virtualDisplay == null) {
                 Log.e(TAG, "Failed to create VirtualDisplay, it's null.")
@@ -244,21 +249,56 @@ class ScreenshotService : Service() {
         }
     }
 
-    private fun performOcrAndSaveFile(bitmap: Bitmap) {
-        val inputImage = InputImage.fromBitmap(bitmap, 0)
-        textRecognizer.process(inputImage)
-            .addOnSuccessListener { visionText ->
-                val ocrResultText = visionText.text
-                Log.d(TAG, "OCR successful: ${ocrResultText.take(150)}")
-                saveFileAndBroadcast(bitmap, ocrResultText)
+    private fun performOcrAndSaveFile(originalBitmapToSave: Bitmap) {
+        var bitmapForOcr: Bitmap? = null
+        var ocrAttempted = false
+        try {
+            // Create a copy of the original bitmap to be resized for OCR.
+            // The originalBitmapToSave itself will be saved to file.
+            val copyForResize = originalBitmapToSave.copy(originalBitmapToSave.config, false)
+            bitmapForOcr = BitmapUtils.getResizedBitmapForOcr(copyForResize) // copyForResize is recycled by BitmapUtils if resized.
+
+            if (bitmapForOcr == null) { // Fallback if resizing somehow fails
+                Log.e(TAG, "Bitmap for OCR is null after resize attempt. Using a direct copy for OCR.")
+                bitmapForOcr = originalBitmapToSave.copy(originalBitmapToSave.config, false)
             }
-            .addOnFailureListener { e ->
-                Log.e(TAG, "OCR failed", e)
-                Handler(mainLooper).post {
-                    Toast.makeText(applicationContext, "OCR failed: ${e.message}", Toast.LENGTH_SHORT).show()
+
+            val inputImage = InputImage.fromBitmap(bitmapForOcr!!, 0) // Use non-null assertion after check/fallback
+            ocrAttempted = true
+
+            textRecognizer.process(inputImage)
+                .addOnSuccessListener { visionText ->
+                    val ocrResultText = visionText.text
+                    Log.d(TAG, "OCR successful: ${ocrResultText.take(150)}")
+                    saveFileAndBroadcast(originalBitmapToSave, ocrResultText)
                 }
-                saveFileAndBroadcast(bitmap, null)
+                .addOnFailureListener { e ->
+                    Log.e(TAG, "OCR failed", e)
+                    Handler(Looper.getMainLooper()).post {
+                        Toast.makeText(applicationContext, "OCR failed: ${e.message}", Toast.LENGTH_SHORT).show()
+                    }
+                    saveFileAndBroadcast(originalBitmapToSave, null)
+                }
+                .addOnCompleteListener {
+                    // Recycle the bitmap used for OCR (which was a copy or resized version)
+                    // Ensure it's not the same instance as originalBitmapToSave (shouldn't be with .copy())
+                    if (bitmapForOcr != originalBitmapToSave && bitmapForOcr?.isRecycled == false) {
+                        bitmapForOcr.recycle()
+                        Log.d(TAG, "Recycled bitmapForOcr (copy/resized) in complete listener.")
+                    }
+                    // originalBitmapToSave is passed to saveFileAndBroadcast and recycled there.
+                }
+        } catch (e: Exception) {
+            Log.e(TAG, "Exception during OCR preparation or processing: ${e.message}", e)
+            if (!ocrAttempted) { // If error before textRecognizer.process
+                saveFileAndBroadcast(originalBitmapToSave, null) // Save original without OCR
             }
+            // Clean up bitmapForOcr if it was created and an error occurred before onCompleteListener
+            if (bitmapForOcr != originalBitmapToSave && bitmapForOcr?.isRecycled == false) {
+                bitmapForOcr.recycle()
+                Log.d(TAG, "Recycled bitmapForOcr (copy/resized) in catch block.")
+            }
+        }
     }
 
     private fun saveFileAndBroadcast(bitmapToSave: Bitmap, ocrText: String?) {
@@ -276,9 +316,7 @@ class ScreenshotService : Service() {
                 Log.i(TAG, "Screenshot bitmap compressed and saved to: ${file.absolutePath}")
             }
             success = true
-            // Instead of showing file path then OCR text,
-            // the broadcast carries the OCR result (if any)
-            Handler(mainLooper).post {
+            Handler(Looper.getMainLooper()).post {
                 Toast.makeText(applicationContext, "Screenshot captured and processed!", Toast.LENGTH_SHORT).show()
             }
             val processedIntent = Intent(ACTION_SCREENSHOT_PROCESSED).apply {
@@ -287,16 +325,16 @@ class ScreenshotService : Service() {
                 setPackage(packageName)
             }
             sendBroadcast(processedIntent)
-            Log.d(TAG, "Broadcast sent with OCR text.")
+            Log.d(TAG, "Broadcast sent. OCR text length: ${ocrText?.length ?: "null"}")
         } catch (e: Exception) {
             Log.e(TAG, "Error saving bitmap: ${e.message}", e)
-            Handler(mainLooper).post {
+            Handler(Looper.getMainLooper()).post {
                 Toast.makeText(applicationContext, "Failed to save screenshot file.", Toast.LENGTH_LONG).show()
             }
         } finally {
             if (!bitmapToSave.isRecycled) {
                 bitmapToSave.recycle()
-                Log.d(TAG, "Bitmap recycled in saveFileAndBroadcast.")
+                Log.d(TAG, "Recycled bitmapToSave in saveFileAndBroadcast.")
             }
             stopSelfService(if(success) "Processing complete." else "File save error or OCR issue.")
         }
@@ -306,18 +344,26 @@ class ScreenshotService : Service() {
         override fun onStop() {
             super.onStop()
             Log.w(TAG, "MediaProjection.Callback onStop called.")
+            // This can be called if the projection is stopped externally or screen is locked.
+            // Ensure resources are cleaned up.
+            serviceHandler.post { releaseResources() }
         }
     }
 
     private fun releaseResources() {
         Log.d(TAG, "Releasing resources...")
-        handler.removeCallbacksAndMessages(null)
+        if (::serviceHandler.isInitialized) { // Check if initialized
+            serviceHandler.removeCallbacksAndMessages(null)
+        }
         virtualDisplay?.release()
         virtualDisplay = null
         imageReader?.close()
         imageReader = null
+        mediaProjection?.unregisterCallback(MediaProjectionCallback())
         mediaProjection?.stop()
         mediaProjection = null
+        hasCapturedImage = false // Reset for next potential capture
+        Log.d(TAG, "Resources released.")
     }
 
     private fun stopSelfService(reason: String? = null) {
@@ -328,6 +374,7 @@ class ScreenshotService : Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             stopForeground(STOP_FOREGROUND_REMOVE)
         } else {
+            @Suppress("DEPRECATION")
             stopForeground(true)
         }
         stopSelf()
@@ -335,7 +382,6 @@ class ScreenshotService : Service() {
     }
 
     override fun onBind(intent: Intent?): IBinder? {
-        Log.d(TAG, "onBind called, returning null.")
         return null
     }
 
