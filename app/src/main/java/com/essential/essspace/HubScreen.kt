@@ -19,7 +19,7 @@ fun HubScreen(
     onNavigateToCamera: () -> Unit,
     onNavigateToAudio: () -> Unit,
     onTakeScreenshot: () -> Unit,
-    // onScreenshotIconClick: () -> Unit, // Parameter removed
+    onNavigateToGalleryImage: () -> Unit, // New callback
     onNavigateToNoteDetail: (Int) -> Unit,
     onAddNewTextNote: () -> Unit
 ) {
@@ -61,7 +61,8 @@ fun HubScreen(
                     onTextNoteClick = onAddNewTextNote,
                     onCameraClick = onNavigateToCamera,
                     onAudioClick = onNavigateToAudio,
-                    onScreenshotClick = onTakeScreenshot
+                    onScreenshotClick = onTakeScreenshot,
+                    onGalleryImageClick = onNavigateToGalleryImage // New parameter
                 )
             }
         }
@@ -74,7 +75,8 @@ fun CaptureOptionsMenuSheet(
     onTextNoteClick: () -> Unit,
     onCameraClick: () -> Unit,
     onAudioClick: () -> Unit,
-    onScreenshotClick: () -> Unit
+    onScreenshotClick: () -> Unit,
+    onGalleryImageClick: () -> Unit // New parameter
 ) {
     Column(
         modifier = Modifier
@@ -91,6 +93,10 @@ fun CaptureOptionsMenuSheet(
         Button(onClick = { onCameraClick(); onDismiss() }, modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
             Icon(Icons.Filled.PhotoCamera, "Photo", modifier = Modifier.padding(end = 8.dp))
             Text("Photo + Optional Audio")
+        }
+        Button(onClick = { onGalleryImageClick(); onDismiss() }, modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) { // New Button
+            Icon(Icons.Filled.Image, "Gallery Image", modifier = Modifier.padding(end = 8.dp))
+            Text("Image from Gallery + OCR")
         }
         Button(onClick = { onAudioClick(); onDismiss() }, modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
             Icon(Icons.Filled.Mic, "Audio", modifier = Modifier.padding(end = 8.dp))
