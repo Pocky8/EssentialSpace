@@ -1,11 +1,9 @@
 package com.essential.essspace
 
-import android.Manifest
 import android.app.Activity
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.speech.RecognizerIntent
-import android.speech.SpeechRecognizer // Keep for isRecognitionAvailable
+import android.speech.SpeechRecognizer
 import android.util.Log
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -19,14 +17,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import com.essential.essspace.util.SummarizationUtils
 import java.util.Locale
 
 @Composable
 fun AudioRecordScreen(
-    photoPath: String?, // Existing parameter
-    onComplete: (audioPath: String?, transcribedText: String?) -> Unit, // For when audio is recorded
-    onSkipAudio: () -> Unit, // New callback when user wants to skip audio
-    onCancel: () -> Unit // Cancel completely
+    photoPath: String?, // Keep photoPath if you want to associate transcription with a photo
+    onComplete: (audioPath: String?, transcribedText: String?) -> Unit,
+    onSkipAudio: () -> Unit,
+    onCancel: () -> Unit
 ) {
     val context = LocalContext.current
     var showProcessingMessage by remember { mutableStateOf(false) }
@@ -38,21 +37,19 @@ fun AudioRecordScreen(
         if (result.resultCode == Activity.RESULT_OK && result.data != null) {
             val speechResults = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
             if (!speechResults.isNullOrEmpty()) {
-                val transcribedText = speechResults[0]
-                Log.d("AudioRecordScreen", "Transcription successful via RecognizerIntent: $transcribedText")
-                onComplete(null, transcribedText) // audioPath stays null
+                val rawTranscribedText = speechResults[0]
+                Log.d("AudioRecordScreen", "Transcription successful: $rawTranscribedText")
+                val bulletedText = SummarizationUtils.summarizeAndBulletText(rawTranscribedText)
+                Log.d("AudioRecordScreen", "Bulleted Text: $bulletedText")
+                onComplete(null, bulletedText) // audioPath is null
             } else {
-                Log.d("AudioRecordScreen", "RecognizerIntent: No speech results found.")
+                Log.d("AudioRecordScreen", "No speech results found.")
                 Toast.makeText(context, "No transcription results.", Toast.LENGTH_SHORT).show()
                 onComplete(null, null)
             }
         } else {
-            Log.d("AudioRecordScreen", "RecognizerIntent: Speech recognition cancelled or failed. ResultCode: ${result.resultCode}")
-            val errorMessage = if (result.resultCode == Activity.RESULT_CANCELED) {
-                "Speech input cancelled."
-            } else {
-                "Speech input failed. Please try again."
-            }
+            Log.d("AudioRecordScreen", "Speech recognition cancelled or failed. ResultCode: ${result.resultCode}")
+            val errorMessage = if (result.resultCode == Activity.RESULT_CANCELED) "Speech input cancelled." else "Speech input failed."
             Toast.makeText(context, errorMessage, Toast.LENGTH_LONG).show()
             onComplete(null, null)
         }
@@ -60,48 +57,24 @@ fun AudioRecordScreen(
 
     fun startSystemSpeechToText() {
         if (!SpeechRecognizer.isRecognitionAvailable(context)) {
-            Toast.makeText(context, "Speech recognition not available on this device.", Toast.LENGTH_LONG).show()
-            onCancel()
+            Toast.makeText(context, "Speech recognition not available.", Toast.LENGTH_LONG).show()
+            onComplete(null, null)
             return
         }
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault().toString())
-            putExtra(RecognizerIntent.EXTRA_PROMPT, "Speak now to create a note...")
+            putExtra(RecognizerIntent.EXTRA_PROMPT, "Speak now to transcribe...")
         }
         try {
-            Log.d("AudioRecordScreen", "Launching RecognizerIntent activity.")
+            Log.d("AudioRecordScreen", "Launching RecognizerIntent for transcription.")
             speechRecognitionLauncher.launch(intent)
-            showProcessingMessage = true
+            // showProcessingMessage = true; // System dialog is usually sufficient
         } catch (e: Exception) {
-            Log.e("AudioRecordScreen", "Error launching RecognizerIntent activity", e)
-            Toast.makeText(context, "Could not start speech recognition service.", Toast.LENGTH_SHORT).show()
+            Log.e("AudioRecordScreen", "Error launching RecognizerIntent", e)
+            Toast.makeText(context, "Could not start speech recognition.", Toast.LENGTH_SHORT).show()
             showProcessingMessage = false
             onComplete(null, null)
-        }
-    }
-
-    val permissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { isGranted: Boolean ->
-        if (isGranted) {
-            Log.d("AudioRecordScreen", "RECORD_AUDIO permission granted for RecognizerIntent.")
-            startSystemSpeechToText()
-        } else {
-            Log.w("AudioRecordScreen", "RECORD_AUDIO permission denied for RecognizerIntent.")
-            Toast.makeText(context, "Audio permission needed for transcription.", Toast.LENGTH_LONG).show()
-            onCancel()
-        }
-    }
-
-    fun requestPermissionAndStart() {
-        when (PackageManager.PERMISSION_GRANTED) {
-            context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) -> {
-                startSystemSpeechToText()
-            }
-            else -> {
-                permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-            }
         }
     }
 
@@ -111,30 +84,40 @@ fun AudioRecordScreen(
         verticalArrangement = Arrangement.Center
     ) {
         if (photoPath != null) {
-            Text("Transcribe note for the photo", style = MaterialTheme.typography.titleMedium)
+            Text("Transcribe audio for the photo", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(16.dp))
+        } else {
+            Text("Transcribe Audio", style = MaterialTheme.typography.titleMedium)
             Spacer(Modifier.height(16.dp))
         }
 
-        if (showProcessingMessage) {
-            Text("Listening via system dialog...")
+        if (showProcessingMessage) { // General processing message
+            Text("Processing speech...")
             Spacer(Modifier.height(16.dp))
             CircularProgressIndicator()
-        } else {
-            Button(onClick = { requestPermissionAndStart() }) {
-                Icon(Icons.Filled.Mic, contentDescription = "Start Transcription")
-                Spacer(Modifier.width(8.dp))
-                Text("Transcribe Speech to Note")
-            }
+            Spacer(Modifier.height(16.dp))
+        }
+
+        Button(onClick = {
+            // No recording, directly start speech to text
+            startSystemSpeechToText()
+        }) {
+            Icon(
+                imageVector = Icons.Filled.Mic,
+                contentDescription = "Start Transcription"
+            )
+            Spacer(Modifier.width(8.dp))
+            Text("Start Transcription")
         }
 
         Spacer(Modifier.height(20.dp))
         OutlinedButton(onClick = {
-            Log.d("AudioRecordScreen", "Skip Audio button clicked.")
+            Log.d("AudioRecordScreen", "Skip Transcription button clicked.")
             onSkipAudio()
         }) {
-            Text("Skip Audio")
+            Text("Skip Transcription")
         }
-        Spacer(Modifier.height(20.dp))
+        Spacer(Modifier.height(8.dp))
         OutlinedButton(onClick = {
             Log.d("AudioRecordScreen", "Cancel button clicked.")
             onCancel()

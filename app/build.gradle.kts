@@ -89,12 +89,19 @@ dependencies {
     implementation("androidx.activity:activity-ktx:1.8.0")
     implementation("androidx.activity:activity-compose:1.8.0")
 
+    //cloud
+    implementation(libs.okhttp) // Or latest
+    implementation(libs.json) // Or latest for JSON parsing
+    implementation(libs.gson) // Added Gson dependency
+    implementation("com.github.jeziellago:compose-markdown:0.3.1") // Downgraded version
+
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.6.2")
     implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.6.2")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.6.2")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.6.2")
 
     implementation("androidx.navigation:navigation-compose:2.7.7")
+    implementation(libs.firebase.crashlytics.buildtools)
 
     val roomVersion = "2.6.1" // Or 2.6.0 if that was in your old working one
     implementation("androidx.room:room-runtime:$roomVersion")

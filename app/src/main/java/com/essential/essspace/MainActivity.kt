@@ -42,11 +42,12 @@ class MainActivity : ComponentActivity() {
             if (intent?.action == ScreenshotService.ACTION_SCREENSHOT_PROCESSED) {
                 val photoPath = intent.getStringExtra(ScreenshotService.EXTRA_PHOTO_PATH)
                 val ocrText = intent.getStringExtra(ScreenshotService.EXTRA_OCR_TEXT)
-                Log.d("MainActivity", "Received screenshot broadcast. OCR text: ${ocrText?.take(100)}")
+                Log.d("MainActivity", "Received screenshot broadcast. Path: $photoPath, OCR text: ${ocrText?.take(100)}")
                 if (photoPath != null) {
-                    autoSavePhotoNote(photoPath, ocrText)
+                    // Instead of auto-saving, trigger the ViewModel to show the dialog
+                    notesViewModel.handleScreenshotProcessed(photoPath, ocrText)
                 } else {
-                    Toast.makeText(context, "Error processing screenshot.", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "Error processing screenshot (no path).", Toast.LENGTH_SHORT).show()
                 }
             }
         }
@@ -122,47 +123,63 @@ class MainActivity : ComponentActivity() {
                         AudioRecordScreen(
                             photoPath = notesViewModel.capturedPhotoPathForNote,
                             onComplete = { audioPath, transcribedTextResult ->
-                                val noteTitle: String
-                                val combinedText = StringBuilder()
                                 val currentPhotoPath = notesViewModel.capturedPhotoPathForNote
                                 val currentOcrText = notesViewModel.ocrTextForCapturedPhotoNote
-                                if (currentPhotoPath != null) {
-                                    noteTitle = "Image Note"
-                                    if (!currentOcrText.isNullOrBlank()) {
-                                        combinedText.append(currentOcrText)
-                                    }
-                                    if (!transcribedTextResult.isNullOrBlank()) {
-                                        if (combinedText.isNotEmpty()) {
-                                            combinedText.append("\n\n---\n\n")
-                                        }
-                                        combinedText.append(transcribedTextResult)
-                                    }
-                                } else {
-                                    noteTitle = if (!transcribedTextResult.isNullOrBlank()) "Audio Note" else "Transcribed Note"
-                                    if (!transcribedTextResult.isNullOrBlank()) {
-                                        combinedText.append(transcribedTextResult)
-                                    }
+
+                                val noteTitle = when {
+                                    currentPhotoPath != null && audioPath != null -> "Photo & Audio Note"
+                                    currentPhotoPath != null && !transcribedTextResult.isNullOrBlank() -> "Photo & Transcription Note" // Changed
+                                    currentPhotoPath != null -> "Photo Note"
+                                    audioPath != null && !transcribedTextResult.isNullOrBlank() -> "Audio & Transcription Note" // New
+                                    audioPath != null -> "Audio Note"
+                                    !transcribedTextResult.isNullOrBlank() -> "Transcription Note" // Changed
+                                    else -> "Note"
                                 }
-                                val finalText = if (combinedText.toString().isBlank()) null else combinedText.toString()
+
+                                val combinedText = StringBuilder()
+                                if (!currentOcrText.isNullOrBlank()) {
+                                    combinedText.append(currentOcrText)
+                                }
+                                if (!transcribedTextResult.isNullOrBlank()) {
+                                    if (combinedText.isNotEmpty()) {
+                                        combinedText.append("\n\n") // Use actual newlines
+                                    }
+                                    combinedText.append(transcribedTextResult)
+                                }
+
+                                Log.d("MainActivity", "Combined text for note: [${combinedText.toString().ifBlank { "null" }}]") // Added log
+
                                 val newNote = Note(
                                     title = noteTitle,
                                     photoPath = currentPhotoPath,
                                     audioPath = audioPath,
-                                    text = finalText,
+                                    text = combinedText.toString().ifBlank { null }, // Use combined text
                                     transcribedText = transcribedTextResult,
-                                    ocrText = if (currentPhotoPath != null) currentOcrText else null
+                                    ocrText = currentOcrText,
+                                    isMarkdown = true
                                 )
                                 notesViewModel.insertNote(newNote)
                                 notesViewModel.prepareForNewCapture()
                                 popToHome()
                             },
                             onSkipAudio = {
-                                // Auto-save the note as photo-only when user skips audio.
                                 val currentPhotoPath = notesViewModel.capturedPhotoPathForNote
                                 val currentOcrText = notesViewModel.ocrTextForCapturedPhotoNote
-                                if (currentPhotoPath != null) {
-                                    autoSavePhotoNote(currentPhotoPath, currentOcrText)
+                                if (currentPhotoPath != null) { // Only save if there's a photo
+                                    val noteTitle = "Photo Note"
+                                    val newNote = Note(
+                                        title = noteTitle,
+                                        photoPath = currentPhotoPath,
+                                        audioPath = null,
+                                        text = currentOcrText, // Use OCR text if skipping audio
+                                        transcribedText = null,
+                                        ocrText = currentOcrText,
+                                        isMarkdown = true // Default to true
+                                    )
+                                    notesViewModel.insertNote(newNote)
                                 }
+                                notesViewModel.prepareForNewCapture()
+                                popToHome()
                             },
                             onCancel = {
                                 notesViewModel.prepareForNewCapture()
@@ -198,13 +215,19 @@ class MainActivity : ComponentActivity() {
                     AlertDialog(
                         onDismissRequest = {
                             // If dismissed, save the note without audio.
-                            autoSavePhotoNote(notesViewModel.photoPathForScreenshotDialog!!, notesViewModel.ocrTextFromScreenshotDialog)
+                            if (notesViewModel.photoPathForScreenshotDialog != null) {
+                                autoSavePhotoNote(notesViewModel.photoPathForScreenshotDialog!!, notesViewModel.ocrTextFromScreenshotDialog)
+                            } else {
+                                // Fallback if data is somehow null, just clear dialog state
+                                notesViewModel.clearScreenshotDialogData()
+                            }
                         },
                         title = { Text("Photo Captured") },
                         text = { Text("Do you want to add audio to this photo note?") },
                         confirmButton = {
                             TextButton(onClick = {
                                 // Prepare for audio recording and navigate
+                                // ViewModel will clear its own dialog data upon this action
                                 notesViewModel.prepareForAudioWithScreenshotData()
                                 mainNavController.navigate(Screen.Audio.route)
                             }) {
@@ -213,7 +236,11 @@ class MainActivity : ComponentActivity() {
                         },
                         dismissButton = {
                             TextButton(onClick = {
-                                autoSavePhotoNote(notesViewModel.photoPathForScreenshotDialog!!, notesViewModel.ocrTextFromScreenshotDialog)
+                                if (notesViewModel.photoPathForScreenshotDialog != null) {
+                                    autoSavePhotoNote(notesViewModel.photoPathForScreenshotDialog!!, notesViewModel.ocrTextFromScreenshotDialog)
+                                } else {
+                                    notesViewModel.clearScreenshotDialogData()
+                                }
                             }) {
                                 Text("Save As Is")
                             }
@@ -225,17 +252,19 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun autoSavePhotoNote(photoPath: String, ocrText: String?) {
-        val noteTitle = if (!ocrText.isNullOrBlank()) "Photo: ${ocrText.take(30).replace("\n", " ")}..." else "Photo Note"
+        val noteTitle = "Photo Note" // Simplified title
         val note = Note(
             title = noteTitle,
             photoPath = photoPath,
             audioPath = null,
-            text = ocrText,
+            text = ocrText, // Use OCR text here
             transcribedText = null,
-            ocrText = ocrText
+            ocrText = ocrText,
+            isMarkdown = true
         )
         notesViewModel.insertNote(note)
         Toast.makeText(this, "Photo note saved.", Toast.LENGTH_SHORT).show()
+        notesViewModel.clearScreenshotDialogData() // Clear ViewModel state for the dialog
         popToHome()
     }
 
