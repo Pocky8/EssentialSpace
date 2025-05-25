@@ -1,0 +1,6 @@
+/local.properties
+/.idea/caches/
+.gradle/
+build/
+/app/src/main/java/com/essential/essspace/BuildConfig.java
+/app/build/

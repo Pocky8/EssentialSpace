@@ -12,7 +12,7 @@ import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.media.ImageReader
-import com.essential.essspace.TextCleanupUtils
+import com.essential.essspace.util.cleanOcrText
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.Build
@@ -57,6 +57,10 @@ class ScreenshotService : Service() {
         const val EXTRA_OCR_TEXT = "extra_ocr_text"
     }
 
+    private var screenDensity = 0
+    private var displayWidth = 0
+    private var screenHeight = 0
+
     override fun onCreate() {
         super.onCreate()
         Log.d(TAG, "onCreate")
@@ -69,6 +73,7 @@ class ScreenshotService : Service() {
         serviceHandler = Handler(handlerThread.looper)
 
         createNotificationChannel()
+        updateScreenMetrics() // Initialize screen metrics
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -127,6 +132,24 @@ class ScreenshotService : Service() {
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
             .build()
+    }
+
+    private fun updateScreenMetrics() {
+        val displayMetrics = DisplayMetrics()
+        // Consistently use windowManager.defaultDisplay to get metrics
+        // This is valid for a service context to get information about the default display.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            // Use windowManager.defaultDisplay for API 30+ as well.
+            // The service context's 'display' property is not suitable here.
+            windowManager.defaultDisplay.getRealMetrics(displayMetrics)
+        } else {
+            @Suppress("DEPRECATION")
+            windowManager.defaultDisplay.getRealMetrics(displayMetrics)
+        }
+        screenDensity = displayMetrics.densityDpi
+        displayWidth = displayMetrics.widthPixels
+        screenHeight = displayMetrics.heightPixels
+        Log.d(TAG, "Screen dimensions updated: $displayWidth x $screenHeight @ $screenDensity dpi")
     }
 
     private fun setupVirtualDisplay() {
@@ -270,9 +293,10 @@ class ScreenshotService : Service() {
             textRecognizer.process(inputImage)
                 .addOnSuccessListener { visionText ->
                     val rawOcrResult = visionText.text
-                    val cleanedOcrResult = TextCleanupUtils.cleanOcrText(rawOcrResult)
-                    Log.d(TAG, "OCR successful. Raw: ${rawOcrResult.take(150)}, Cleaned: ${cleanedOcrResult?.take(150)}")
-                    saveFileAndBroadcast(originalBitmapToSave, cleanedOcrResult) // Pass cleaned text
+                    // Use the standardized cleanOcrText from util package
+                    val cleanedReadableOcrResult = cleanOcrText(rawOcrResult)
+                    Log.d(TAG, "OCR successful. Raw: ${rawOcrResult.take(150)}, CleanedReadable: ${cleanedReadableOcrResult.take(150)}")
+                    saveFileAndBroadcast(originalBitmapToSave, cleanedReadableOcrResult) // Pass readable text
                 }
                 .addOnFailureListener { e ->
                     Log.e(TAG, "OCR failed", e)
