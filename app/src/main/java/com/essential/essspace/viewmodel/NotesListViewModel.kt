@@ -157,7 +157,7 @@ class NotesListViewModel(application: Application) : AndroidViewModel(applicatio
         summarizationStatus = "Summarizing..."
         viewModelScope.launch {
             // TODO: Get API Key from secure storage/settings
-            val apiKey = BuildConfig.HUGGING_FACE_API_KEY // User-provided Hugging Face API Key
+            val apiKey = BuildConfig.github_fix // User-provided Hugging Face API Key
             if (apiKey.isBlank()) {
                 summarizationStatus = "API Key not set for summarization."
                 Log.e("ViewModel", "Hugging Face API Key is not set.")

@@ -44,7 +44,7 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "1.0"
-        buildConfigField("String", "HUGGING_FACE_API_KEY", "\"${getLocalProperty("HUGGING_FACE_API_KEY")}\"")
+        buildConfigField("String", "github_fix", "\"${getLocalProperty("github_fix")}\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
