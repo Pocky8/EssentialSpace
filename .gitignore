@@ -2,4 +2,5 @@
 /.idea/caches/
 .gradle/
 build/
-/BuildConfig.java
+/app/src/main/java/com/essential/essspace/BuildConfig.java
+/app/build/
