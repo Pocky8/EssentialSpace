@@ -5,6 +5,7 @@ import android.content.Context // Required for ConnectivityManager
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.util.Log
+import com.essential.essspace.BuildConfig
 import android.widget.Toast
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -156,7 +157,7 @@ class NotesListViewModel(application: Application) : AndroidViewModel(applicatio
         summarizationStatus = "Summarizing..."
         viewModelScope.launch {
             // TODO: Get API Key from secure storage/settings
-            val apiKey = "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" // User-provided Hugging Face API Key
+            val apiKey = BuildConfig.HUGGING_FACE_API_KEY // User-provided Hugging Face API Key
             if (apiKey.isBlank()) {
                 summarizationStatus = "API Key not set for summarization."
                 Log.e("ViewModel", "Hugging Face API Key is not set.")

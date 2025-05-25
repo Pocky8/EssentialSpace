@@ -1,10 +1,22 @@
+import java.util.Properties
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("com.google.devtools.ksp") version "1.9.10-1.0.13" // Add KSP version here
 }
+fun getLocalProperty(key: String): String {
+    val properties = Properties()
+    val file = rootProject.file("local.properties")
+    if (file.exists()) {
+        properties.load(file.inputStream())
+        return properties.getProperty(key, "").replace("\"", "")
+    }
+    return ""
+}
+
 
 android {
+
     packaging {
         resources {
             excludes += setOf(
@@ -19,6 +31,9 @@ android {
             )
         }
     }
+    buildFeatures {
+        buildConfig = true
+    }
 
     namespace = "com.essential.essspace"
     compileSdk = 34
@@ -29,6 +44,7 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "1.0"
+        buildConfigField("String", "HUGGING_FACE_API_KEY", "\"${getLocalProperty("HUGGING_FACE_API_KEY")}\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
